@@ -1,7 +1,0 @@
-services:
-  mongodb:
-    ports:
-      - '27017:27017'
-  meilisearch:
-    ports:
-      - '7700:7700'
