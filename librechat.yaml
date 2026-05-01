@@ -51,6 +51,11 @@ fileConfig:
       totalSizeLimit: 50
       supportedMimeTypes:
         - 'image/.*'
+        - 'application/pdf'
+        - 'text/plain'
+        - 'text/markdown'
+        - 'application/msword'
+        - 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     default:
       totalSizeLimit: 20
   serverFileSizeLimit: 100
