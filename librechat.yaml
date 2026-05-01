@@ -1,0 +1,60 @@
+version: 1.3.9
+cache: true
+
+interface:
+  customWelcome: 'LibreChat connected to the NS2E ChatGPT Plus gateway.'
+  fileSearch: true
+
+endpoints:
+  agents:
+    allowedProviders:
+      - 'NS2E'
+    capabilities:
+      - 'deferred_tools'
+      - 'execute_code'
+      - 'file_search'
+      - 'web_search'
+      - 'artifacts'
+      - 'actions'
+      - 'context'
+      - 'tools'
+      - 'chain'
+      - 'ocr'
+  custom:
+    - name: 'NS2E'
+      apiKey: '${NS2E_API_KEY}'
+      baseURL: '${NS2E_BASE_URL}'
+      models:
+        default:
+          - 'gpt5.5'
+          - 'gpt-5.4'
+          - 'gpt-5.3-codex'
+          - 'gpt-5.2-codex'
+          - 'gpt-5.1-codex'
+          - 'gpt-5-codex'
+          - 'gpt-5'
+          - 'gpt-4o'
+        fetch: false
+      titleConvo: true
+      titleModel: 'gpt5.5'
+      summarize: false
+      summaryModel: 'gpt5.5'
+      modelDisplayLabel: 'NS2E'
+      dropParams:
+        - 'stop'
+
+fileConfig:
+  endpoints:
+    NS2E:
+      fileLimit: 5
+      fileSizeLimit: 20
+      totalSizeLimit: 50
+      supportedMimeTypes:
+        - 'image/.*'
+    default:
+      totalSizeLimit: 20
+  serverFileSizeLimit: 100
+  avatarSizeLimit: 2
+  imageGeneration:
+    percentage: 100
+    px: 1024
