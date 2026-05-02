@@ -43,6 +43,11 @@ export * from './endpoints';
 export * from './files';
 /* Storage */
 export * from './storage';
+/* Subscriptions */
+export * from './subscriptions/config';
+export * from './subscriptions/quota';
+export * from './subscriptions/types';
+export * from './subscriptions/windows';
 /* Tools */
 export * from './tools';
 /* web search */
