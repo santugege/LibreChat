@@ -1,0 +1,877 @@
+import mongoose from 'mongoose';
+import { MongoMemoryServer } from 'mongodb-memory-server';
+import { tenantStorage } from '~/config/tenantContext';
+import { createModels } from '~/models';
+import { createMethods } from './index';
+
+jest.mock('~/config/winston', () => ({
+  error: jest.fn(),
+  warn: jest.fn(),
+  info: jest.fn(),
+  debug: jest.fn(),
+}));
+
+jest.mock('~/config/meiliLogger', () => ({
+  error: jest.fn(),
+  warn: jest.fn(),
+  info: jest.fn(),
+  debug: jest.fn(),
+}));
+
+jest.setTimeout(60000);
+
+type SubscriptionPlanInput = {
+  key: string;
+  name: string;
+  description?: string;
+  price: number;
+  durationDays: number;
+  textDailyLimit: number;
+  imageDailyLimit: number;
+  enabled: boolean;
+  sortOrder: number;
+  tenantId?: string;
+};
+
+type SubscriptionPlanResult = SubscriptionPlanInput & {
+  _id: mongoose.Types.ObjectId;
+};
+
+type ConsumeSubscriptionQuotaInput = {
+  user: string;
+  kind: 'text' | 'image';
+  amount: number;
+  limit: number;
+  windowKey: string;
+  windowStart: Date;
+  windowEnd: Date;
+  requestId: string;
+  tenantId?: string;
+};
+
+type RuntimeConsumeSubscriptionQuotaInput = Omit<ConsumeSubscriptionQuotaInput, 'kind'> & {
+  kind: string;
+};
+
+type ConsumeSubscriptionQuotaResult = {
+  allowed: boolean;
+  used: number;
+  limit: number;
+  resetAt: Date;
+};
+
+type UserSubscriptionResult = {
+  _id: mongoose.Types.ObjectId;
+  user: mongoose.Types.ObjectId;
+  planKey: string;
+  status: 'active' | 'expired' | 'cancelled';
+  startsAt: Date;
+  expiresAt: Date;
+  tenantId?: string | null;
+};
+
+type SubscriptionUsageBucketResult = {
+  user: mongoose.Types.ObjectId;
+  windowKey: string;
+  textUsed: number;
+  imageUsed: number;
+  textRequestIds: string[];
+  imageRequestIds: string[];
+  tenantId?: string | null;
+};
+
+type SubscriptionUsageEventMetadataResult = {
+  windowStart?: string;
+  windowEnd?: string;
+  limit?: number;
+  [key: string]: string | number | boolean | undefined;
+};
+
+type SubscriptionUsageEventResult = {
+  _id: mongoose.Types.ObjectId;
+  user: mongoose.Types.ObjectId;
+  kind: 'text' | 'image';
+  amount: number;
+  requestId: string;
+  bucketKey: string;
+  windowStart: Date;
+  windowEnd: Date;
+  limit: number;
+  status: 'committed' | 'released';
+  metadata?: SubscriptionUsageEventMetadataResult;
+  tenantId?: string | null;
+};
+
+type SubscriptionTestMethods = {
+  upsertSubscriptionPlan: (input: SubscriptionPlanInput) => Promise<SubscriptionPlanResult | null>;
+  getEnabledSubscriptionPlans: (tenantId?: string) => Promise<SubscriptionPlanResult[]>;
+  findActiveUserSubscription: (
+    user: string,
+    now?: Date,
+    tenantId?: string,
+  ) => Promise<UserSubscriptionResult | null>;
+  consumeSubscriptionQuota: (
+    input: ConsumeSubscriptionQuotaInput,
+  ) => Promise<ConsumeSubscriptionQuotaResult>;
+};
+
+const subscriptionModelNames = [
+  'SubscriptionPlan',
+  'UserSubscription',
+  'SubscriptionUsageBucket',
+  'SubscriptionUsageEvent',
+  'SubscriptionPaymentOrder',
+] as const;
+
+describe('subscription methods', () => {
+  let mongoServer: MongoMemoryServer;
+  let methods: ReturnType<typeof createMethods> & Partial<SubscriptionTestMethods>;
+
+  beforeAll(async () => {
+    mongoServer = await MongoMemoryServer.create();
+    await mongoose.connect(mongoServer.getUri());
+
+    const models = createModels(mongoose);
+    Object.assign(mongoose.models, models);
+
+    methods = createMethods(mongoose) as ReturnType<typeof createMethods> &
+      Partial<SubscriptionTestMethods>;
+    await Promise.all(
+      subscriptionModelNames.map((modelName) => mongoose.models[modelName].syncIndexes()),
+    );
+  });
+
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    await Promise.all(
+      subscriptionModelNames.map((modelName) => mongoose.models[modelName].deleteMany({})),
+    );
+  });
+
+  afterAll(async () => {
+    await mongoose.disconnect();
+    await mongoServer.stop();
+  });
+
+  test('upserts subscription plans and returns enabled plans sorted for display', async () => {
+    await methods.upsertSubscriptionPlan!({
+      key: 'pro',
+      name: 'Pro',
+      price: 29,
+      durationDays: 30,
+      textDailyLimit: 200,
+      imageDailyLimit: 50,
+      enabled: true,
+      sortOrder: 2,
+    });
+
+    await methods.upsertSubscriptionPlan!({
+      key: 'starter',
+      name: 'Starter',
+      price: 9,
+      durationDays: 30,
+      textDailyLimit: 50,
+      imageDailyLimit: 10,
+      enabled: true,
+      sortOrder: 1,
+    });
+
+    await methods.upsertSubscriptionPlan!({
+      key: 'hidden',
+      name: 'Hidden',
+      price: 0,
+      durationDays: 30,
+      textDailyLimit: 1,
+      imageDailyLimit: 1,
+      enabled: false,
+      sortOrder: 0,
+    });
+
+    const plans = await methods.getEnabledSubscriptionPlans!();
+
+    expect(plans.map((plan) => plan.key)).toEqual(['starter', 'pro']);
+    expect(plans[0].textDailyLimit).toBe(50);
+    expect(plans[1].imageDailyLimit).toBe(50);
+  });
+
+  test('consumes subscription quota until the limit is reached', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const windowStart = new Date('2026-05-01T16:00:00.000Z');
+    const windowEnd = new Date('2026-05-02T16:00:00.000Z');
+
+    const first = await methods.consumeSubscriptionQuota!({
+      user,
+      kind: 'text',
+      amount: 1,
+      limit: 2,
+      windowKey: '2026-05-02',
+      windowStart,
+      windowEnd,
+      requestId: 'req-1',
+    });
+
+    const second = await methods.consumeSubscriptionQuota!({
+      user,
+      kind: 'text',
+      amount: 1,
+      limit: 2,
+      windowKey: '2026-05-02',
+      windowStart,
+      windowEnd,
+      requestId: 'req-2',
+    });
+
+    const third = await methods.consumeSubscriptionQuota!({
+      user,
+      kind: 'text',
+      amount: 1,
+      limit: 2,
+      windowKey: '2026-05-02',
+      windowStart,
+      windowEnd,
+      requestId: 'req-3',
+    });
+
+    expect(first).toMatchObject({ allowed: true, used: 1, limit: 2 });
+    expect(second).toMatchObject({ allowed: true, used: 2, limit: 2 });
+    expect(third).toMatchObject({ allowed: false, used: 2, limit: 2 });
+    expect(third.resetAt).toEqual(windowEnd);
+  });
+
+  test('keeps tenantless plans separate from tenant-scoped plans with the same key', async () => {
+    await methods.upsertSubscriptionPlan!({
+      key: 'pro',
+      name: 'Tenant Pro',
+      price: 29,
+      durationDays: 30,
+      textDailyLimit: 200,
+      imageDailyLimit: 50,
+      enabled: true,
+      sortOrder: 1,
+      tenantId: 'tenant-a',
+    });
+
+    const tenantlessPlan = await methods.upsertSubscriptionPlan!({
+      key: 'pro',
+      name: 'Tenantless Pro',
+      price: 19,
+      durationDays: 30,
+      textDailyLimit: 100,
+      imageDailyLimit: 25,
+      enabled: true,
+      sortOrder: 1,
+    });
+
+    const tenantlessPlans = await methods.getEnabledSubscriptionPlans!();
+    const tenantPlans = await methods.getEnabledSubscriptionPlans!('tenant-a');
+
+    expect(tenantlessPlan?.tenantId ?? null).toBeNull();
+    expect(tenantlessPlans.map((plan) => plan.name)).toEqual(['Tenantless Pro']);
+    expect(tenantPlans.map((plan) => plan.name)).toEqual(['Tenant Pro']);
+  });
+
+  test('rejects invalid subscription plan upserts through schema validators', async () => {
+    const Plan = mongoose.models.SubscriptionPlan as mongoose.Model<SubscriptionPlanResult>;
+    const basePlan: SubscriptionPlanInput = {
+      key: 'validator-base',
+      name: 'Validator Base',
+      price: 29.99,
+      durationDays: 30,
+      textDailyLimit: 100,
+      imageDailyLimit: 25,
+      enabled: true,
+      sortOrder: 1,
+    };
+
+    await expect(
+      methods.upsertSubscriptionPlan!({
+        ...basePlan,
+        key: 'invalid-price',
+        price: -1,
+      }),
+    ).rejects.toThrow();
+    await expect(Plan.countDocuments({ key: 'invalid-price', tenantId: null })).resolves.toBe(0);
+
+    await expect(
+      methods.upsertSubscriptionPlan!({
+        ...basePlan,
+        key: 'fractional-duration',
+        durationDays: 1.5,
+      }),
+    ).rejects.toThrow();
+    await expect(Plan.countDocuments({ key: 'fractional-duration', tenantId: null })).resolves.toBe(
+      0,
+    );
+
+    await expect(
+      methods.upsertSubscriptionPlan!({
+        ...basePlan,
+        key: 'fractional-text-limit',
+        textDailyLimit: 10.5,
+      }),
+    ).rejects.toThrow();
+    await expect(
+      Plan.countDocuments({ key: 'fractional-text-limit', tenantId: null }),
+    ).resolves.toBe(0);
+
+    await expect(
+      methods.upsertSubscriptionPlan!({
+        ...basePlan,
+        key: 'fractional-image-limit',
+        imageDailyLimit: 2.5,
+      }),
+    ).rejects.toThrow();
+    await expect(
+      Plan.countDocuments({ key: 'fractional-image-limit', tenantId: null }),
+    ).resolves.toBe(0);
+
+    await expect(
+      methods.upsertSubscriptionPlan!({
+        ...basePlan,
+        key: 'fractional-sort-order',
+        sortOrder: 1.5,
+      }),
+    ).rejects.toThrow();
+    await expect(
+      Plan.countDocuments({ key: 'fractional-sort-order', tenantId: null }),
+    ).resolves.toBe(0);
+
+    const fractionalPricePlan = await methods.upsertSubscriptionPlan!({
+      ...basePlan,
+      key: 'fractional-price',
+      price: 29.99,
+    });
+
+    expect(fractionalPricePlan?.price).toBe(29.99);
+  });
+
+  test('keeps payment order trade numbers globally unique for webhook lookup', async () => {
+    const Order = mongoose.models.SubscriptionPaymentOrder as mongoose.Model<{
+      user: mongoose.Types.ObjectId;
+      outTradeNo: string;
+      planKey: string;
+      amount: number;
+      paymentType: 'alipay' | 'wxpay';
+      status: 'pending' | 'paid' | 'fulfilling' | 'completed' | 'expired' | 'cancelled' | 'failed';
+      expiresAt: Date;
+      tenantId?: string | null;
+    }>;
+    const user = new mongoose.Types.ObjectId();
+    const expiresAt = new Date('2026-05-03T00:00:00.000Z');
+
+    await Order.create({
+      user,
+      outTradeNo: 'shared-out-trade-no',
+      planKey: 'pro',
+      amount: 29,
+      paymentType: 'alipay',
+      status: 'pending',
+      expiresAt,
+      tenantId: 'tenant-a',
+    });
+
+    await expect(
+      Order.create({
+        user,
+        outTradeNo: 'shared-out-trade-no',
+        planKey: 'pro',
+        amount: 29,
+        paymentType: 'alipay',
+        status: 'pending',
+        expiresAt,
+        tenantId: 'tenant-b',
+      }),
+    ).rejects.toMatchObject({ code: 11000 });
+  });
+
+  test('keeps tenantless quota events separate from tenant-scoped request ids', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const windowStart = new Date('2026-05-01T16:00:00.000Z');
+    const windowEnd = new Date('2026-05-02T16:00:00.000Z');
+    const input = {
+      user,
+      kind: 'text' as const,
+      amount: 1,
+      limit: 2,
+      windowKey: '2026-05-02',
+      windowStart,
+      windowEnd,
+      requestId: 'shared-request-id',
+    };
+
+    await methods.consumeSubscriptionQuota!({ ...input, tenantId: 'tenant-a' });
+    const tenantlessResult = await methods.consumeSubscriptionQuota!(input);
+
+    const Event = mongoose.models.SubscriptionUsageEvent as mongoose.Model<{
+      requestId: string;
+      tenantId?: string | null;
+    }>;
+    const Bucket = mongoose.models.SubscriptionUsageBucket as mongoose.Model<{
+      user: mongoose.Types.ObjectId;
+      windowKey: string;
+      tenantId?: string | null;
+    }>;
+    const events = await Event.find({ requestId: 'shared-request-id' }).lean();
+    const buckets = await Bucket.find({
+      user: new mongoose.Types.ObjectId(user),
+      windowKey: '2026-05-02',
+    }).lean();
+    const eventTenantIds = events.map((event) => event.tenantId ?? null);
+    const bucketTenantIds = buckets.map((bucket) => bucket.tenantId ?? null);
+
+    expect(tenantlessResult).toMatchObject({ allowed: true, used: 1, limit: 2 });
+    expect(eventTenantIds).toHaveLength(2);
+    expect(eventTenantIds).toContain('tenant-a');
+    expect(eventTenantIds).toContain(null);
+    expect(bucketTenantIds).toHaveLength(2);
+    expect(bucketTenantIds).toContain('tenant-a');
+    expect(bucketTenantIds).toContain(null);
+  });
+
+  test('allows only one concurrent distinct request when quota limit is one', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const windowStart = new Date('2026-05-01T16:00:00.000Z');
+    const windowEnd = new Date('2026-05-02T16:00:00.000Z');
+    const inputs = Array.from({ length: 5 }, (_, index) => ({
+      user,
+      kind: 'text' as const,
+      amount: 1,
+      limit: 1,
+      windowKey: '2026-05-02',
+      windowStart,
+      windowEnd,
+      requestId: `distinct-request-${index}`,
+    }));
+
+    const results = await Promise.allSettled(
+      inputs.map((input) => methods.consumeSubscriptionQuota!(input)),
+    );
+    const rejected = results.filter((result) => result.status === 'rejected');
+    const fulfilled = results.filter(
+      (result): result is PromiseFulfilledResult<ConsumeSubscriptionQuotaResult> =>
+        result.status === 'fulfilled',
+    );
+    const Bucket = mongoose.models
+      .SubscriptionUsageBucket as mongoose.Model<SubscriptionUsageBucketResult>;
+    const bucket = await Bucket.findOne({
+      user: new mongoose.Types.ObjectId(user),
+      windowKey: '2026-05-02',
+      tenantId: null,
+    }).lean();
+
+    expect(rejected).toHaveLength(0);
+    expect(fulfilled.filter((result) => result.value.allowed)).toHaveLength(1);
+    expect(fulfilled.filter((result) => !result.value.allowed)).toHaveLength(4);
+    expect(bucket?.textUsed).toBe(1);
+  });
+
+  test('treats concurrent duplicate request ids as idempotent quota consumption', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const windowStart = new Date('2026-05-01T16:00:00.000Z');
+    const windowEnd = new Date('2026-05-02T16:00:00.000Z');
+    const input = {
+      user,
+      kind: 'text' as const,
+      amount: 1,
+      limit: 5,
+      windowKey: '2026-05-02',
+      windowStart,
+      windowEnd,
+      requestId: 'duplicate-request',
+    };
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () => methods.consumeSubscriptionQuota!(input)),
+    );
+    const rejected = results.filter((result) => result.status === 'rejected');
+    const fulfilled = results.filter(
+      (result): result is PromiseFulfilledResult<ConsumeSubscriptionQuotaResult> =>
+        result.status === 'fulfilled',
+    );
+    const Bucket = mongoose.models
+      .SubscriptionUsageBucket as mongoose.Model<SubscriptionUsageBucketResult>;
+    const bucket = await Bucket.findOne({
+      user: new mongoose.Types.ObjectId(user),
+      windowKey: '2026-05-02',
+      tenantId: null,
+    }).lean();
+
+    expect(rejected).toHaveLength(0);
+    expect(fulfilled).toHaveLength(5);
+    expect(fulfilled.every((result) => result.value.allowed)).toBe(true);
+    expect(bucket?.textUsed).toBe(1);
+    expect(bucket?.textRequestIds).toEqual(['duplicate-request']);
+    expect(bucket?.imageRequestIds).toEqual([]);
+  });
+
+  test('throws when duplicate request ids use different quota dimensions', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const otherUser = new mongoose.Types.ObjectId().toString();
+    const windowStart = new Date('2026-05-01T16:00:00.000Z');
+    const windowEnd = new Date('2026-05-02T16:00:00.000Z');
+    const requestId = 'dimension-mismatch';
+
+    await methods.consumeSubscriptionQuota!({
+      user,
+      kind: 'text',
+      amount: 1,
+      limit: 5,
+      windowKey: '2026-05-02',
+      windowStart,
+      windowEnd,
+      requestId,
+    });
+
+    await expect(
+      methods.consumeSubscriptionQuota!({
+        user: otherUser,
+        kind: 'image',
+        amount: 2,
+        limit: 5,
+        windowKey: '2026-05-03',
+        windowStart: new Date('2026-05-02T16:00:00.000Z'),
+        windowEnd: new Date('2026-05-03T16:00:00.000Z'),
+        requestId,
+      }),
+    ).rejects.toThrow('Subscription quota requestId collision');
+
+    const Bucket = mongoose.models
+      .SubscriptionUsageBucket as mongoose.Model<SubscriptionUsageBucketResult>;
+    const buckets = await Bucket.find({ tenantId: null }).lean();
+
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0].user.toString()).toBe(user);
+    expect(buckets[0].windowKey).toBe('2026-05-02');
+    expect(buckets[0].textUsed).toBe(1);
+  });
+
+  test('throws when duplicate request ids reuse a window key with different bounds or limit', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const windowStart = new Date('2026-05-01T16:00:00.000Z');
+    const windowEnd = new Date('2026-05-02T16:00:00.000Z');
+    const requestId = 'window-metadata-mismatch';
+
+    await methods.consumeSubscriptionQuota!({
+      user,
+      kind: 'text',
+      amount: 1,
+      limit: 5,
+      windowKey: '2026-05-02',
+      windowStart,
+      windowEnd,
+      requestId,
+    });
+
+    await expect(
+      methods.consumeSubscriptionQuota!({
+        user,
+        kind: 'text',
+        amount: 1,
+        limit: 6,
+        windowKey: '2026-05-02',
+        windowStart,
+        windowEnd: new Date('2026-05-03T16:00:00.000Z'),
+        requestId,
+      }),
+    ).rejects.toThrow('Subscription quota requestId collision');
+  });
+
+  test('rejects invalid runtime quota input before mutating buckets', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const windowStart = new Date('2026-05-01T16:00:00.000Z');
+    const windowEnd = new Date('2026-05-02T16:00:00.000Z');
+    const validInput: ConsumeSubscriptionQuotaInput = {
+      user,
+      kind: 'text',
+      amount: 1,
+      limit: 5,
+      windowKey: '2026-05-02',
+      windowStart,
+      windowEnd,
+      requestId: 'runtime-validation',
+    };
+    const consumeRuntime = methods.consumeSubscriptionQuota as (
+      input: RuntimeConsumeSubscriptionQuotaInput,
+    ) => Promise<ConsumeSubscriptionQuotaResult>;
+    const Bucket = mongoose.models
+      .SubscriptionUsageBucket as mongoose.Model<SubscriptionUsageBucketResult>;
+    const invalidInputs: Array<[string, RuntimeConsumeSubscriptionQuotaInput]> = [
+      ['empty request id', { ...validInput, requestId: '' }],
+      ['invalid kind', { ...validInput, kind: 'audio' }],
+      ['non-integer amount', { ...validInput, amount: 1.5 }],
+      ['invalid window range', { ...validInput, windowEnd: windowStart }],
+    ];
+
+    for (const [, input] of invalidInputs) {
+      await expect(consumeRuntime(input)).rejects.toThrow('Invalid subscription quota input');
+      await expect(Bucket.countDocuments({})).resolves.toBe(0);
+    }
+  });
+
+  test('rolls back bucket consumption when usage event creation fails', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const windowStart = new Date('2026-05-01T16:00:00.000Z');
+    const windowEnd = new Date('2026-05-02T16:00:00.000Z');
+    const Event = mongoose.models.SubscriptionUsageEvent as mongoose.Model<{
+      requestId: string;
+    }>;
+    const Bucket = mongoose.models
+      .SubscriptionUsageBucket as mongoose.Model<SubscriptionUsageBucketResult>;
+
+    jest.spyOn(Event, 'create').mockRejectedValueOnce(new Error('event store unavailable'));
+
+    await expect(
+      methods.consumeSubscriptionQuota!({
+        user,
+        kind: 'text',
+        amount: 1,
+        limit: 5,
+        windowKey: '2026-05-02',
+        windowStart,
+        windowEnd,
+        requestId: 'event-create-fails',
+      }),
+    ).rejects.toThrow('event store unavailable');
+
+    const bucket = await Bucket.findOne({
+      user: new mongoose.Types.ObjectId(user),
+      windowKey: '2026-05-02',
+      tenantId: null,
+    }).lean();
+
+    expect(bucket?.textUsed ?? 0).toBe(0);
+    expect(bucket?.textRequestIds ?? []).toEqual([]);
+  });
+
+  test('rolls back bucket consumption when event creation and follow-up lookup fail', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const windowStart = new Date('2026-05-01T16:00:00.000Z');
+    const windowEnd = new Date('2026-05-02T16:00:00.000Z');
+    const Event = mongoose.models
+      .SubscriptionUsageEvent as mongoose.Model<SubscriptionUsageEventResult>;
+    const Bucket = mongoose.models
+      .SubscriptionUsageBucket as mongoose.Model<SubscriptionUsageBucketResult>;
+    const createError = new Error('event store unavailable');
+
+    jest.spyOn(Event, 'create').mockRejectedValueOnce(createError);
+    jest
+      .spyOn(Event.collection, 'findOne')
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error('event lookup unavailable'));
+
+    await expect(
+      methods.consumeSubscriptionQuota!({
+        user,
+        kind: 'text',
+        amount: 1,
+        limit: 5,
+        windowKey: '2026-05-02',
+        windowStart,
+        windowEnd,
+        requestId: 'event-create-and-lookup-fail',
+      }),
+    ).rejects.toThrow('event store unavailable');
+
+    const bucket = await Bucket.findOne({
+      user: new mongoose.Types.ObjectId(user),
+      windowKey: '2026-05-02',
+      tenantId: null,
+    }).lean();
+
+    expect(bucket?.textUsed ?? 0).toBe(0);
+    expect(bucket?.textRequestIds ?? []).toEqual([]);
+  });
+
+  test('keeps usage event canonical dimensions immutable through save and update', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const replacementUser = new mongoose.Types.ObjectId();
+    const windowStart = new Date('2026-05-01T16:00:00.000Z');
+    const windowEnd = new Date('2026-05-02T16:00:00.000Z');
+    const Event = mongoose.models
+      .SubscriptionUsageEvent as mongoose.Model<SubscriptionUsageEventResult>;
+
+    await methods.consumeSubscriptionQuota!({
+      user,
+      kind: 'text',
+      amount: 1,
+      limit: 5,
+      windowKey: '2026-05-02',
+      windowStart,
+      windowEnd,
+      requestId: 'immutable-event',
+    });
+
+    const event = await Event.findOne({ requestId: 'immutable-event', tenantId: null }).orFail();
+    const eventId = event._id;
+    expect(event.windowStart).toEqual(windowStart);
+    expect(event.windowEnd).toEqual(windowEnd);
+    expect(event.limit).toBe(5);
+
+    event.user = replacementUser;
+    event.kind = 'image';
+    event.amount = 2;
+    event.requestId = 'save-changed-event';
+    event.bucketKey = 'save-changed-window';
+    event.windowStart = new Date('2026-05-02T16:00:00.000Z');
+    event.windowEnd = new Date('2026-05-03T16:00:00.000Z');
+    event.limit = 99;
+    event.tenantId = 'tenant-a';
+    event.status = 'released';
+    await event.save();
+
+    const afterSave = await Event.findById(eventId).lean().orFail();
+    expect(afterSave.user.toString()).toBe(user);
+    expect(afterSave.kind).toBe('text');
+    expect(afterSave.amount).toBe(1);
+    expect(afterSave.requestId).toBe('immutable-event');
+    expect(afterSave.bucketKey).toBe('2026-05-02');
+    expect(afterSave.windowStart).toEqual(windowStart);
+    expect(afterSave.windowEnd).toEqual(windowEnd);
+    expect(afterSave.limit).toBe(5);
+    expect(afterSave.tenantId ?? null).toBeNull();
+    expect(afterSave.status).toBe('released');
+
+    await Event.updateOne(
+      { _id: eventId },
+      {
+        $set: {
+          user: replacementUser,
+          kind: 'image',
+          amount: 3,
+          requestId: 'update-changed-event',
+          bucketKey: 'update-changed-window',
+          windowStart: new Date('2026-05-03T16:00:00.000Z'),
+          windowEnd: new Date('2026-05-04T16:00:00.000Z'),
+          limit: 100,
+          status: 'committed',
+        },
+      },
+    );
+
+    const afterUpdate = await Event.findById(eventId).lean().orFail();
+    expect(afterUpdate.user.toString()).toBe(user);
+    expect(afterUpdate.kind).toBe('text');
+    expect(afterUpdate.amount).toBe(1);
+    expect(afterUpdate.requestId).toBe('immutable-event');
+    expect(afterUpdate.bucketKey).toBe('2026-05-02');
+    expect(afterUpdate.windowStart).toEqual(windowStart);
+    expect(afterUpdate.windowEnd).toEqual(windowEnd);
+    expect(afterUpdate.limit).toBe(5);
+    expect(afterUpdate.tenantId ?? null).toBeNull();
+    expect(afterUpdate.status).toBe('committed');
+  });
+
+  test('honors explicit plan tenant filters inside an ambient tenant context', async () => {
+    await methods.upsertSubscriptionPlan!({
+      key: 'ambient',
+      name: 'Tenantless Ambient',
+      price: 19,
+      durationDays: 30,
+      textDailyLimit: 100,
+      imageDailyLimit: 25,
+      enabled: true,
+      sortOrder: 1,
+    });
+
+    await methods.upsertSubscriptionPlan!({
+      key: 'ambient',
+      name: 'Tenant B Ambient',
+      price: 29,
+      durationDays: 30,
+      textDailyLimit: 200,
+      imageDailyLimit: 50,
+      enabled: true,
+      sortOrder: 1,
+      tenantId: 'tenant-b',
+    });
+
+    const [tenantlessPlans, tenantBPlans] = await tenantStorage.run(
+      { tenantId: 'tenant-a' },
+      async () => {
+        const tenantless = await methods.getEnabledSubscriptionPlans!();
+        const tenantB = await methods.getEnabledSubscriptionPlans!('tenant-b');
+        return [tenantless, tenantB];
+      },
+    );
+
+    expect(tenantlessPlans.map((plan) => plan.name)).toEqual(['Tenantless Ambient']);
+    expect(tenantBPlans.map((plan) => plan.name)).toEqual(['Tenant B Ambient']);
+  });
+
+  test('keeps tenantless active subscriptions separate from tenant-scoped subscriptions', async () => {
+    const UserSubscription = mongoose.models.UserSubscription as mongoose.Model<{
+      user: mongoose.Types.ObjectId;
+      planKey: string;
+      status: 'active' | 'expired' | 'cancelled';
+      startsAt: Date;
+      expiresAt: Date;
+      tenantId?: string | null;
+    }>;
+    const user = new mongoose.Types.ObjectId();
+    const now = new Date('2026-05-02T00:00:00.000Z');
+
+    await UserSubscription.create([
+      {
+        user,
+        planKey: 'tenantless-pro',
+        status: 'active',
+        startsAt: new Date('2026-05-01T00:00:00.000Z'),
+        expiresAt: new Date('2026-05-04T00:00:00.000Z'),
+      },
+      {
+        user,
+        planKey: 'tenant-pro',
+        status: 'active',
+        startsAt: new Date('2026-05-01T00:00:00.000Z'),
+        expiresAt: new Date('2026-05-05T00:00:00.000Z'),
+        tenantId: 'tenant-a',
+      },
+    ]);
+
+    const tenantlessSubscription = await methods.findActiveUserSubscription!(user.toString(), now);
+    const tenantSubscription = await methods.findActiveUserSubscription!(
+      user.toString(),
+      now,
+      'tenant-a',
+    );
+
+    expect(tenantlessSubscription?.planKey).toBe('tenantless-pro');
+    expect(tenantlessSubscription?.tenantId ?? null).toBeNull();
+    expect(tenantSubscription?.planKey).toBe('tenant-pro');
+    expect(tenantSubscription?.tenantId).toBe('tenant-a');
+  });
+
+  test('ignores future-dated active subscriptions until their start date', async () => {
+    const UserSubscription = mongoose.models.UserSubscription as mongoose.Model<{
+      user: mongoose.Types.ObjectId;
+      planKey: string;
+      status: 'active' | 'expired' | 'cancelled';
+      startsAt: Date;
+      expiresAt: Date;
+      tenantId?: string | null;
+    }>;
+    const user = new mongoose.Types.ObjectId();
+    const now = new Date('2026-05-02T00:00:00.000Z');
+
+    await UserSubscription.create([
+      {
+        user,
+        planKey: 'current-pro',
+        status: 'active',
+        startsAt: new Date('2026-05-01T00:00:00.000Z'),
+        expiresAt: new Date('2026-05-03T00:00:00.000Z'),
+      },
+      {
+        user,
+        planKey: 'future-pro',
+        status: 'active',
+        startsAt: new Date('2026-05-03T00:00:00.000Z'),
+        expiresAt: new Date('2026-05-10T00:00:00.000Z'),
+      },
+    ]);
+
+    const subscription = await methods.findActiveUserSubscription!(user.toString(), now);
+
+    expect(subscription?.planKey).toBe('current-pro');
+  });
+});

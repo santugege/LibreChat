@@ -7,6 +7,7 @@ export * from './token';
 export * from './convo';
 export * from './session';
 export * from './balance';
+export * from './subscription';
 export * from './banner';
 export * from './transaction';
 export * from './message';
