@@ -171,6 +171,22 @@ function createPaymentDb(overrides: Partial<SubscriptionPaymentDb> = {}): Subscr
   };
 }
 
+function mockFetch(
+  implementation: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>,
+): jest.MockedFunction<typeof fetch> {
+  const fetchMock = Object.assign(
+    jest.fn<ReturnType<typeof fetch>, Parameters<typeof fetch>>(implementation),
+    {
+      preconnect: jest.fn<
+        ReturnType<typeof fetch.preconnect>,
+        Parameters<typeof fetch.preconnect>
+      >(),
+    },
+  );
+  global.fetch = fetchMock;
+  return fetchMock;
+}
+
 describe('createSubscriptionPaymentService', () => {
   const originalFetch = global.fetch;
 
@@ -192,7 +208,7 @@ describe('createSubscriptionPaymentService', () => {
     const createdOrders: Parameters<SubscriptionPaymentDb['createSubscriptionPaymentOrder']>[0][] =
       [];
     let receivedTenantId: string | undefined;
-    const fetchMock = jest.fn<ReturnType<typeof fetch>, Parameters<typeof fetch>>(async () => {
+    const fetchMock = mockFetch(async () => {
       return new Response(
         JSON.stringify({
           code: 1,
@@ -220,7 +236,6 @@ describe('createSubscriptionPaymentService', () => {
       markSubscriptionOrderFailed: async () => null,
       createOrExtendUserSubscription: async () => null,
     };
-    global.fetch = fetchMock;
 
     const service = createSubscriptionPaymentService(db);
     const result = await service.createOrder({
@@ -283,7 +298,7 @@ describe('createSubscriptionPaymentService', () => {
   test('rejects malformed ZPay order responses before persisting an order', async () => {
     const createdOrders: Parameters<SubscriptionPaymentDb['createSubscriptionPaymentOrder']>[0][] =
       [];
-    global.fetch = jest.fn<ReturnType<typeof fetch>, Parameters<typeof fetch>>(async () => {
+    mockFetch(async () => {
       return new Response('not-json', { headers: { 'Content-Type': 'application/json' } });
     });
     const db = createPaymentDb({
@@ -306,7 +321,7 @@ describe('createSubscriptionPaymentService', () => {
   test('rejects successful ZPay order responses without a payment URL or QR code', async () => {
     const createdOrders: Parameters<SubscriptionPaymentDb['createSubscriptionPaymentOrder']>[0][] =
       [];
-    global.fetch = jest.fn<ReturnType<typeof fetch>, Parameters<typeof fetch>>(async () => {
+    mockFetch(async () => {
       return new Response(JSON.stringify({ code: 1, trade_no: 'zpay-trade-1' }), {
         headers: { 'Content-Type': 'application/json' },
       });
@@ -331,7 +346,7 @@ describe('createSubscriptionPaymentService', () => {
   test('rejects successful ZPay order responses with invalid payment instructions', async () => {
     const createdOrders: Parameters<SubscriptionPaymentDb['createSubscriptionPaymentOrder']>[0][] =
       [];
-    global.fetch = jest.fn<ReturnType<typeof fetch>, Parameters<typeof fetch>>(async () => {
+    mockFetch(async () => {
       return new Response(
         JSON.stringify({
           code: 1,
@@ -362,7 +377,7 @@ describe('createSubscriptionPaymentService', () => {
   test('persists the rounded amount sent to ZPay', async () => {
     const createdOrders: Parameters<SubscriptionPaymentDb['createSubscriptionPaymentOrder']>[0][] =
       [];
-    global.fetch = jest.fn<ReturnType<typeof fetch>, Parameters<typeof fetch>>(async () => {
+    const fetchMock = mockFetch(async () => {
       return new Response(
         JSON.stringify({
           code: 1,
@@ -384,7 +399,6 @@ describe('createSubscriptionPaymentService', () => {
       user: { id: 'user-1' },
       body: { planKey: 'pro', paymentType: 'alipay' },
     });
-    const fetchMock = global.fetch as jest.MockedFunction<typeof fetch>;
     const body = fetchMock.mock.calls[0][1]?.body;
 
     if (!(body instanceof URLSearchParams)) {

@@ -48,6 +48,7 @@ export * from './subscriptions/config';
 export * from './subscriptions/payment/easypay';
 export * from './subscriptions/payment/service';
 export * from './subscriptions/quota';
+export * from './subscriptions/routes';
 export * from './subscriptions/types';
 export * from './subscriptions/windows';
 /* Tools */
