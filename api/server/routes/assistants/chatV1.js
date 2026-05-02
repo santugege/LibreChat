@@ -1,4 +1,5 @@
 const express = require('express');
+const { createTextQuotaMiddleware } = require('@librechat/api');
 
 const router = express.Router();
 const {
@@ -10,6 +11,7 @@ const {
 const validateConvoAccess = require('~/server/middleware/validate/convoAccess');
 const validateAssistant = require('~/server/middleware/assistants/validate');
 const chatController = require('~/server/controllers/assistants/chatV1');
+const db = require('~/models');
 
 router.post('/abort', handleAbort());
 
@@ -27,6 +29,7 @@ router.post(
   buildEndpointOption,
   validateAssistant,
   validateConvoAccess,
+  createTextQuotaMiddleware(db),
   setHeaders,
   chatController,
 );

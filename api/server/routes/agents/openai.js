@@ -20,8 +20,12 @@ const express = require('express');
 const { PermissionTypes, Permissions } = require('librechat-data-provider');
 const {
   generateCheckAccess,
+  validateRequest,
+  createErrorResponse,
+  createTextQuotaMiddleware,
   createRequireApiKeyAuth,
   createCheckRemoteAgentAccess,
+  isChatCompletionValidationFailure,
 } = require('@librechat/api');
 const {
   OpenAIChatCompletionController,
@@ -49,6 +53,20 @@ const checkAgentPermission = createCheckRemoteAgentAccess({
   getAgent: db.getAgent,
   getEffectivePermissions,
 });
+const checkTextQuota = createTextQuotaMiddleware(db, {
+  errorFormat: 'openai',
+  requestIdPolicy: 'generated',
+});
+
+function validateChatCompletionRequest(req, res, next) {
+  const validation = validateRequest(req.body);
+  if (isChatCompletionValidationFailure(validation)) {
+    res.status(400).json(createErrorResponse(validation.error));
+    return;
+  }
+
+  next();
+}
 
 router.use(requireApiKeyAuth);
 router.use(configMiddleware);
@@ -75,7 +93,13 @@ router.use(checkRemoteAgentsFeature);
  * Response (non-streaming):
  * - Standard OpenAI chat.completion format
  */
-router.post('/chat/completions', checkAgentPermission, OpenAIChatCompletionController);
+router.post(
+  '/chat/completions',
+  checkAgentPermission,
+  validateChatCompletionRequest,
+  checkTextQuota,
+  OpenAIChatCompletionController,
+);
 
 /**
  * @route GET /v1/models

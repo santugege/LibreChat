@@ -16,6 +16,14 @@ type TMessageLimit = {
   windowInMinutes: number;
 };
 
+type TSubscriptionQuota = {
+  kind: string;
+  used: number;
+  limit: number;
+  planKey: string;
+  resetAt: string;
+};
+
 type TTokenBalance = {
   type: ViolationTypes | ErrorTypes;
   balance: number;
@@ -99,6 +107,10 @@ const errorMessages = {
     return `You hit the message limit. You have a cap of ${max} message${plural} per ${
       windowInMinutes > 1 ? `${windowInMinutes} minutes` : 'minute'
     }.`;
+  },
+  subscription_quota: (json: TSubscriptionQuota, localize: LocalizeFunction) => {
+    const { used, limit, planKey, resetAt } = json;
+    return localize('com_error_subscription_quota', { 0: used, 1: limit, 2: planKey, 3: resetAt });
   },
   token_balance: (json: TTokenBalance) => {
     const { balance, tokenCost, promptTokens, generations } = json;

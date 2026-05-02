@@ -1,5 +1,10 @@
 const express = require('express');
-const { generateCheckAccess, skipAgentCheck } = require('@librechat/api');
+const {
+  generateCheckAccess,
+  skipAgentCheck,
+  createTextQuotaMiddleware,
+  createTextQuotaIdempotencyMiddleware,
+} = require('@librechat/api');
 const { PermissionTypes, Permissions, PermissionBits } = require('librechat-data-provider');
 const {
   moderateText,
@@ -11,7 +16,9 @@ const {
 const { initializeClient } = require('~/server/services/Endpoints/agents');
 const AgentController = require('~/server/controllers/agents/request');
 const addTitle = require('~/server/services/Endpoints/agents/title');
-const { getRoleByName } = require('~/models');
+const db = require('~/models');
+
+const { getRoleByName } = db;
 
 const router = express.Router();
 
@@ -31,6 +38,9 @@ router.use(checkAgentResourceAccess);
 router.use(validateConvoAccess);
 router.use(buildEndpointOption);
 
+const checkTextQuota = createTextQuotaMiddleware(db);
+const checkTextQuotaIdempotency = createTextQuotaIdempotencyMiddleware();
+
 const controller = async (req, res, next) => {
   await AgentController(req, res, next, initializeClient, addTitle);
 };
@@ -43,7 +53,7 @@ const controller = async (req, res, next) => {
  * @param {express.Response} res - The response object, used to send back a response.
  * @returns {void}
  */
-router.post('/', controller);
+router.post('/', checkTextQuotaIdempotency, checkTextQuota, controller);
 
 /**
  * @route POST /:endpoint (ephemeral agents)
@@ -53,6 +63,6 @@ router.post('/', controller);
  * @param {express.Response} res - The response object, used to send back a response.
  * @returns {void}
  */
-router.post('/:endpoint', controller);
+router.post('/:endpoint', checkTextQuotaIdempotency, checkTextQuota, controller);
 
 module.exports = router;

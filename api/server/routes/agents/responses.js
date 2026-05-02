@@ -23,7 +23,11 @@ const express = require('express');
 const { PermissionTypes, Permissions } = require('librechat-data-provider');
 const {
   generateCheckAccess,
+  isValidationFailure,
+  createTextQuotaMiddleware,
   createRequireApiKeyAuth,
+  validateResponseRequest,
+  sendResponsesErrorResponse,
   createCheckRemoteAgentAccess,
 } = require('@librechat/api');
 const {
@@ -52,6 +56,20 @@ const checkAgentPermission = createCheckRemoteAgentAccess({
   getAgent: db.getAgent,
   getEffectivePermissions,
 });
+const checkTextQuota = createTextQuotaMiddleware(db, {
+  errorFormat: 'responses',
+  requestIdPolicy: 'generated',
+});
+
+function validateCreateResponseRequest(req, res, next) {
+  const validation = validateResponseRequest(req.body);
+  if (isValidationFailure(validation)) {
+    sendResponsesErrorResponse(res, 400, validation.error);
+    return;
+  }
+
+  next();
+}
 
 router.use(requireApiKeyAuth);
 router.use(configMiddleware);
@@ -98,7 +116,13 @@ router.use(checkRemoteAgentsFeature);
  *   "usage": { ... }
  * }
  */
-router.post('/', checkAgentPermission, createResponse);
+router.post(
+  '/',
+  checkAgentPermission,
+  validateCreateResponseRequest,
+  checkTextQuota,
+  createResponse,
+);
 
 /**
  * @route GET /v1/responses/models

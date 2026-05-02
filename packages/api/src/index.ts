@@ -47,6 +47,8 @@ export * from './storage';
 export * from './subscriptions/config';
 export * from './subscriptions/payment/easypay';
 export * from './subscriptions/payment/service';
+export * from './subscriptions/idempotency';
+export * from './subscriptions/middleware';
 export * from './subscriptions/quota';
 export * from './subscriptions/routes';
 export * from './subscriptions/types';

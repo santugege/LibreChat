@@ -5,6 +5,7 @@ const {
   getViolationInfo,
   buildMessageFiles,
   GenerationJobManager,
+  rememberTextQuotaIdempotency,
   decrementPendingRequest,
   sanitizeMessageForTransmit,
   checkAndIncrementPendingRequest,
@@ -78,9 +79,12 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     const jobCreatedAt = job.createdAt; // Capture creation time to detect job replacement
     req._resumableStreamId = streamId;
 
+    const startResponse = { streamId, conversationId, status: 'started' };
+    rememberTextQuotaIdempotency(req, startResponse);
+
     // Send JSON response IMMEDIATELY so client can connect to SSE stream
     // This is critical: tool loading (MCP OAuth) may emit events that the client needs to receive
-    res.json({ streamId, conversationId, status: 'started' });
+    res.json(startResponse);
 
     // Note: We no longer use res.on('close') to abort since we send JSON immediately.
     // The response closes normally after res.json(), which is not an abort condition.
