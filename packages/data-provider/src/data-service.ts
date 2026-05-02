@@ -117,6 +117,24 @@ export function getUserBalance(): Promise<t.TBalanceResponse> {
   return request.get(endpoints.balance());
 }
 
+export function getSubscriptionPlans(): Promise<t.TSubscriptionPlan[]> {
+  return request.get(endpoints.subscriptionPlans());
+}
+
+export function getSubscriptionStatus(): Promise<t.TSubscriptionStatus> {
+  return request.get(endpoints.subscriptionStatus());
+}
+
+export function createSubscriptionOrder(
+  payload: t.TCreateSubscriptionOrderRequest,
+): Promise<t.TCreateSubscriptionOrderResponse> {
+  return request.post(endpoints.subscriptionOrders(), payload);
+}
+
+export function getSubscriptionOrder(orderId: string): Promise<t.TSubscriptionOrder> {
+  return request.get(endpoints.subscriptionOrder(orderId));
+}
+
 export const updateTokenCount = (text: string) => {
   return request.post(endpoints.tokenizer(), { arg: text });
 };

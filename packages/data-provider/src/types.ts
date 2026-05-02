@@ -394,6 +394,68 @@ export type TUpdateTokenCountResponse = {
   count: number;
 };
 
+export type TSubscriptionQuotaKind = 'text' | 'image';
+
+export type TSubscriptionOrderStatus =
+  | 'pending'
+  | 'paid'
+  | 'fulfilling'
+  | 'completed'
+  | 'expired'
+  | 'cancelled'
+  | 'failed';
+
+export type TSubscriptionPlan = {
+  key: string;
+  name: string;
+  description?: string;
+  price: number;
+  durationDays: number;
+  textDailyLimit: number;
+  imageDailyLimit: number;
+  enabled: boolean;
+  sortOrder: number;
+};
+
+export type TSubscriptionUsage = {
+  windowKey: string;
+  resetAt: string;
+  text: { used: number; limit: number };
+  image: { used: number; limit: number };
+};
+
+export type TSubscriptionStatus = {
+  plan: TSubscriptionPlan;
+  subscription?: {
+    planKey: string;
+    status: 'active' | 'expired' | 'cancelled';
+    startsAt: string;
+    expiresAt: string;
+  } | null;
+  usage: TSubscriptionUsage;
+};
+
+export type TCreateSubscriptionOrderRequest = {
+  planKey: string;
+  paymentType: 'alipay' | 'wxpay';
+  isMobile?: boolean;
+};
+
+export type TCreateSubscriptionOrderResponse = {
+  orderId: string;
+  outTradeNo: string;
+  status: TSubscriptionOrderStatus;
+  payUrl?: string;
+  qrCode?: string;
+  expiresAt: string;
+};
+
+export type TSubscriptionOrder = TCreateSubscriptionOrderResponse & {
+  planKey: string;
+  amount: number;
+  completedAt?: string;
+};
+
 export type TMessageTreeNode = object;
 
 export type TSearchMessage = object;

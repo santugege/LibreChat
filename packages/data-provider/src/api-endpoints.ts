@@ -44,6 +44,13 @@ export const user = () => `${BASE_URL}/api/user`;
 
 export const balance = () => `${BASE_URL}/api/balance`;
 
+export const subscriptions = () => `${BASE_URL}/api/subscriptions`;
+export const subscriptionPlans = () => `${subscriptions()}/plans`;
+export const subscriptionStatus = () => `${subscriptions()}/me`;
+export const subscriptionOrders = () => `${subscriptions()}/orders`;
+export const subscriptionOrder = (orderId: string) =>
+  `${subscriptionOrders()}/${encodeURIComponent(orderId)}`;
+
 export const userPlugins = () => `${BASE_URL}/api/user/plugins`;
 
 export const deleteUser = () => `${BASE_URL}/api/user/delete`;

@@ -11,6 +11,9 @@ export enum QueryKeys {
   name = 'name', // user key name
   models = 'models',
   balance = 'balance',
+  subscriptionPlans = 'subscriptionPlans',
+  subscriptionStatus = 'subscriptionStatus',
+  subscriptionOrder = 'subscriptionOrder',
   endpoints = 'endpoints',
   presets = 'presets',
   searchResults = 'searchResults',
