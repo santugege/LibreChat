@@ -143,6 +143,7 @@ helm/**/.values.yaml
 /.openai/
 /.tabnine/
 /.codeium
+.worktrees/
 *.local.md
 
 # Removed Windows wrapper files per user request
