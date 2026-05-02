@@ -34,6 +34,16 @@ const userSubscriptionSchema = new Schema<IUserSubscription>(
       ref: 'SubscriptionPaymentOrder',
       default: undefined,
     },
+    sourceOrderIds: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: 'SubscriptionPaymentOrder',
+      },
+    ],
+    fulfillmentKey: {
+      type: String,
+      default: undefined,
+    },
     tenantId: {
       type: String,
       index: true,
@@ -44,5 +54,19 @@ const userSubscriptionSchema = new Schema<IUserSubscription>(
 );
 
 userSubscriptionSchema.index({ user: 1, status: 1, expiresAt: 1 });
+userSubscriptionSchema.index(
+  { sourceOrderIds: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { sourceOrderIds: { $type: 'objectId' } },
+  },
+);
+userSubscriptionSchema.index(
+  { fulfillmentKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { fulfillmentKey: { $type: 'string' } },
+  },
+);
 
 export default userSubscriptionSchema;

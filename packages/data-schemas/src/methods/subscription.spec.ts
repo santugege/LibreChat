@@ -67,7 +67,51 @@ type UserSubscriptionResult = {
   status: 'active' | 'expired' | 'cancelled';
   startsAt: Date;
   expiresAt: Date;
+  sourceOrderId?: mongoose.Types.ObjectId;
+  sourceOrderIds?: mongoose.Types.ObjectId[];
+  fulfillmentKey?: string;
   tenantId?: string | null;
+};
+
+type SubscriptionPaymentOrderInput = {
+  user: string;
+  outTradeNo: string;
+  tradeNo?: string;
+  planKey: string;
+  durationDays?: number;
+  amount: number;
+  paymentType: 'alipay' | 'wxpay';
+  status?: 'pending' | 'paid' | 'fulfilling' | 'completed' | 'expired' | 'cancelled' | 'failed';
+  payUrl?: string;
+  qrCode?: string;
+  expiresAt: Date;
+  tenantId?: string;
+};
+
+type SubscriptionPaymentOrderResult = Omit<SubscriptionPaymentOrderInput, 'user' | 'tenantId'> & {
+  _id: mongoose.Types.ObjectId;
+  user: mongoose.Types.ObjectId;
+  status: 'pending' | 'paid' | 'fulfilling' | 'completed' | 'expired' | 'cancelled' | 'failed';
+  rawNotify?: string;
+  paidAt?: Date;
+  fulfillingAt?: Date;
+  completedAt?: Date;
+  failedAt?: Date;
+  failedReason?: string;
+  tenantId?: string | null;
+};
+
+type SubscriptionPaymentOrderLockResult = {
+  fulfillingAt: Date;
+};
+
+type CreateOrExtendUserSubscriptionInput = {
+  user: string;
+  planKey: string;
+  durationDays: number;
+  sourceOrderId: mongoose.Types.ObjectId;
+  now?: Date;
+  tenantId?: string;
 };
 
 type SubscriptionUsageBucketResult = {
@@ -113,6 +157,33 @@ type SubscriptionTestMethods = {
   consumeSubscriptionQuota: (
     input: ConsumeSubscriptionQuotaInput,
   ) => Promise<ConsumeSubscriptionQuotaResult>;
+  createSubscriptionPaymentOrder: (
+    input: SubscriptionPaymentOrderInput,
+  ) => Promise<SubscriptionPaymentOrderResult | null>;
+  findSubscriptionPaymentOrderByTradeNo: (
+    outTradeNo: string,
+  ) => Promise<SubscriptionPaymentOrderResult | null>;
+  markSubscriptionOrderPaid: (
+    outTradeNo: string,
+    tradeNo: string,
+    rawNotify: string,
+  ) => Promise<SubscriptionPaymentOrderResult | null>;
+  markSubscriptionOrderFulfilling: (
+    outTradeNo: string,
+    now?: Date,
+  ) => Promise<SubscriptionPaymentOrderLockResult | null>;
+  markSubscriptionOrderCompleted: (
+    outTradeNo: string,
+    fulfillingAt: Date,
+  ) => Promise<SubscriptionPaymentOrderResult | null>;
+  markSubscriptionOrderFailed: (
+    outTradeNo: string,
+    reason: string,
+    fulfillingAt: Date,
+  ) => Promise<SubscriptionPaymentOrderResult | null>;
+  createOrExtendUserSubscription: (
+    input: CreateOrExtendUserSubscriptionInput,
+  ) => Promise<UserSubscriptionResult | null>;
 };
 
 const subscriptionModelNames = [
@@ -382,6 +453,344 @@ describe('subscription methods', () => {
         tenantId: 'tenant-b',
       }),
     ).rejects.toMatchObject({ code: 11000 });
+  });
+
+  test('creates payment orders and locks fulfillment once after payment', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const expiresAt = new Date('2026-05-03T00:00:00.000Z');
+
+    const created = await methods.createSubscriptionPaymentOrder!({
+      user,
+      outTradeNo: 'lc_order_1',
+      planKey: 'pro',
+      durationDays: 30,
+      amount: 29,
+      paymentType: 'alipay',
+      payUrl: 'https://pay.example/pay',
+      qrCode: 'https://pay.example/qr',
+      expiresAt,
+      tenantId: 'tenant-a',
+    });
+    const found = await methods.findSubscriptionPaymentOrderByTradeNo!('lc_order_1');
+    const paid = await methods.markSubscriptionOrderPaid!(
+      'lc_order_1',
+      'zpay-trade-1',
+      'raw=notify',
+    );
+    const firstLock = await methods.markSubscriptionOrderFulfilling!('lc_order_1');
+    const duplicateLock = await methods.markSubscriptionOrderFulfilling!('lc_order_1');
+    const completed = await methods.markSubscriptionOrderCompleted!(
+      'lc_order_1',
+      firstLock!.fulfillingAt,
+    );
+
+    expect(created).toMatchObject({
+      outTradeNo: 'lc_order_1',
+      status: 'pending',
+      durationDays: 30,
+      tenantId: 'tenant-a',
+    });
+    expect(found?.tenantId).toBe('tenant-a');
+    expect(paid).toMatchObject({
+      status: 'paid',
+      tradeNo: 'zpay-trade-1',
+      rawNotify: 'raw=notify',
+    });
+    expect(paid?.paidAt).toBeInstanceOf(Date);
+    expect(firstLock?.fulfillingAt).toBeInstanceOf(Date);
+    expect(duplicateLock).toBeNull();
+    expect(completed).toMatchObject({ status: 'completed' });
+    expect(completed?.completedAt).toBeInstanceOf(Date);
+  });
+
+  test('reacquires stale fulfilling payment order locks', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const expiresAt = new Date('2026-05-03T00:00:00.000Z');
+    const firstLockAt = new Date('2026-05-02T00:00:00.000Z');
+    const duplicateLockAt = new Date('2026-05-02T00:05:00.000Z');
+    const staleLockAt = new Date('2026-05-02T00:11:00.000Z');
+
+    await methods.createSubscriptionPaymentOrder!({
+      user,
+      outTradeNo: 'lc_stale_lock',
+      planKey: 'pro',
+      durationDays: 30,
+      amount: 29,
+      paymentType: 'alipay',
+      expiresAt,
+    });
+    await methods.markSubscriptionOrderPaid!('lc_stale_lock', 'zpay-trade-stale', 'raw=notify');
+
+    const firstLock = await methods.markSubscriptionOrderFulfilling!('lc_stale_lock', firstLockAt);
+    const duplicateLock = await methods.markSubscriptionOrderFulfilling!(
+      'lc_stale_lock',
+      duplicateLockAt,
+    );
+    const staleLock = await methods.markSubscriptionOrderFulfilling!('lc_stale_lock', staleLockAt);
+    const order = await methods.findSubscriptionPaymentOrderByTradeNo!('lc_stale_lock');
+    const oldLeaseCompleted = await methods.markSubscriptionOrderCompleted!(
+      'lc_stale_lock',
+      firstLock!.fulfillingAt,
+    );
+    const oldLeaseFailed = await methods.markSubscriptionOrderFailed!(
+      'lc_stale_lock',
+      'old worker failed',
+      firstLock!.fulfillingAt,
+    );
+    const completed = await methods.markSubscriptionOrderCompleted!(
+      'lc_stale_lock',
+      staleLock!.fulfillingAt,
+    );
+
+    expect(firstLock?.fulfillingAt.toISOString()).toBe(firstLockAt.toISOString());
+    expect(duplicateLock).toBeNull();
+    expect(staleLock?.fulfillingAt.toISOString()).toBe(staleLockAt.toISOString());
+    expect(order).toMatchObject({ status: 'fulfilling' });
+    expect(order?.failedReason).toBeUndefined();
+    expect(order?.fulfillingAt?.toISOString()).toBe(staleLockAt.toISOString());
+    expect(oldLeaseCompleted).toBeNull();
+    expect(oldLeaseFailed).toBeNull();
+    expect(completed).toMatchObject({ status: 'completed' });
+  });
+
+  test('marks locked payment orders failed without changing completed orders', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const expiresAt = new Date('2026-05-03T00:00:00.000Z');
+
+    await methods.createSubscriptionPaymentOrder!({
+      user,
+      outTradeNo: 'lc_order_failed',
+      planKey: 'pro',
+      amount: 29,
+      paymentType: 'wxpay',
+      expiresAt,
+    });
+    await methods.createSubscriptionPaymentOrder!({
+      user,
+      outTradeNo: 'lc_order_completed',
+      planKey: 'pro',
+      amount: 29,
+      paymentType: 'wxpay',
+      expiresAt,
+    });
+    await methods.markSubscriptionOrderPaid!('lc_order_failed', 'zpay-trade-failed', 'raw=failed');
+    await methods.markSubscriptionOrderPaid!(
+      'lc_order_completed',
+      'zpay-trade-completed',
+      'raw=completed',
+    );
+    const failedLock = await methods.markSubscriptionOrderFulfilling!('lc_order_failed');
+    const completedLock = await methods.markSubscriptionOrderFulfilling!('lc_order_completed');
+    await methods.markSubscriptionOrderCompleted!(
+      'lc_order_completed',
+      completedLock!.fulfillingAt,
+    );
+
+    const failed = await methods.markSubscriptionOrderFailed!(
+      'lc_order_failed',
+      'fulfillment failed',
+      failedLock!.fulfillingAt,
+    );
+    const stillCompleted = await methods.markSubscriptionOrderFailed!(
+      'lc_order_completed',
+      'late failure',
+      completedLock!.fulfillingAt,
+    );
+
+    expect(failed).toMatchObject({
+      status: 'failed',
+      failedReason: 'fulfillment failed',
+    });
+    expect(failed?.failedAt).toBeInstanceOf(Date);
+    expect(stillCompleted).toBeNull();
+    await expect(
+      methods.findSubscriptionPaymentOrderByTradeNo!('lc_order_completed'),
+    ).resolves.toMatchObject({ status: 'completed' });
+  });
+
+  test('creates one subscription for repeated source order fulfillment', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const sourceOrderId = new mongoose.Types.ObjectId();
+    const now = new Date('2026-05-02T00:00:00.000Z');
+
+    const created = await methods.createOrExtendUserSubscription!({
+      user,
+      planKey: 'pro',
+      durationDays: 30,
+      sourceOrderId,
+      now,
+      tenantId: 'tenant-a',
+    });
+    const repeated = await methods.createOrExtendUserSubscription!({
+      user,
+      planKey: 'pro',
+      durationDays: 30,
+      sourceOrderId,
+      now,
+      tenantId: 'tenant-a',
+    });
+    const UserSubscription = mongoose.models
+      .UserSubscription as mongoose.Model<UserSubscriptionResult>;
+    const subscriptions = await UserSubscription.find({
+      user: new mongoose.Types.ObjectId(user),
+      tenantId: 'tenant-a',
+    }).lean();
+
+    expect(created?.expiresAt.toISOString()).toBe('2026-06-01T00:00:00.000Z');
+    expect(repeated?._id.toString()).toBe(created?._id.toString());
+    expect(repeated?.expiresAt.toISOString()).toBe('2026-06-01T00:00:00.000Z');
+    expect(subscriptions).toHaveLength(1);
+  });
+
+  test('does not extend again when an older fulfilled source order is retried', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const firstSourceOrderId = new mongoose.Types.ObjectId();
+    const secondSourceOrderId = new mongoose.Types.ObjectId();
+    const now = new Date('2026-05-02T00:00:00.000Z');
+
+    const first = await methods.createOrExtendUserSubscription!({
+      user,
+      planKey: 'pro',
+      durationDays: 30,
+      sourceOrderId: firstSourceOrderId,
+      now,
+      tenantId: 'tenant-a',
+    });
+    const second = await methods.createOrExtendUserSubscription!({
+      user,
+      planKey: 'pro',
+      durationDays: 30,
+      sourceOrderId: secondSourceOrderId,
+      now,
+      tenantId: 'tenant-a',
+    });
+    const repeatedFirst = await methods.createOrExtendUserSubscription!({
+      user,
+      planKey: 'pro',
+      durationDays: 30,
+      sourceOrderId: firstSourceOrderId,
+      now,
+      tenantId: 'tenant-a',
+    });
+    const UserSubscription = mongoose.models
+      .UserSubscription as mongoose.Model<UserSubscriptionResult>;
+    const afterRetry = await UserSubscription.findById(first?._id).lean().orFail();
+
+    expect(second?._id.toString()).toBe(first?._id.toString());
+    expect(second?.expiresAt.toISOString()).toBe('2026-07-01T00:00:00.000Z');
+    expect(repeatedFirst?._id.toString()).toBe(first?._id.toString());
+    expect(repeatedFirst?.expiresAt.toISOString()).toBe('2026-07-01T00:00:00.000Z');
+    expect(afterRetry.expiresAt.toISOString()).toBe('2026-07-01T00:00:00.000Z');
+    expect(afterRetry.sourceOrderIds?.map((value) => value.toString()).sort()).toEqual(
+      [firstSourceOrderId.toString(), secondSourceOrderId.toString()].sort(),
+    );
+  });
+
+  test('applies concurrent distinct source order extensions without losing duration', async () => {
+    const UserSubscription = mongoose.models
+      .UserSubscription as mongoose.Model<UserSubscriptionResult>;
+    const user = new mongoose.Types.ObjectId();
+    const now = new Date('2026-05-02T00:00:00.000Z');
+    const active = await UserSubscription.create({
+      user,
+      planKey: 'pro',
+      status: 'active',
+      startsAt: now,
+      expiresAt: new Date('2026-06-01T00:00:00.000Z'),
+      tenantId: 'tenant-a',
+    });
+    const sourceOrderIds = Array.from({ length: 5 }, () => new mongoose.Types.ObjectId());
+
+    const results = await Promise.all(
+      sourceOrderIds.map((sourceOrderId) =>
+        methods.createOrExtendUserSubscription!({
+          user: user.toString(),
+          planKey: 'pro',
+          durationDays: 30,
+          sourceOrderId,
+          now,
+          tenantId: 'tenant-a',
+        }),
+      ),
+    );
+    const afterExtensions = await UserSubscription.findById(active._id).lean().orFail();
+
+    expect(results.every((result) => result?._id.toString() === active._id.toString())).toBe(true);
+    expect(afterExtensions.expiresAt.toISOString()).toBe('2026-10-29T00:00:00.000Z');
+    expect(afterExtensions.sourceOrderIds?.map((value) => value.toString()).sort()).toEqual(
+      sourceOrderIds.map((value) => value.toString()).sort(),
+    );
+  });
+
+  test('coalesces concurrent first-time paid fulfillments into one subscription', async () => {
+    const UserSubscription = mongoose.models
+      .UserSubscription as mongoose.Model<UserSubscriptionResult>;
+    const user = new mongoose.Types.ObjectId();
+    const now = new Date('2026-05-02T00:00:00.000Z');
+    const sourceOrderIds = Array.from({ length: 5 }, () => new mongoose.Types.ObjectId());
+
+    const results = await Promise.all(
+      sourceOrderIds.map((sourceOrderId) =>
+        methods.createOrExtendUserSubscription!({
+          user: user.toString(),
+          planKey: 'pro',
+          durationDays: 30,
+          sourceOrderId,
+          now,
+          tenantId: 'tenant-a',
+        }),
+      ),
+    );
+    const subscriptions = await UserSubscription.find({ user, tenantId: 'tenant-a' }).lean();
+
+    expect(subscriptions).toHaveLength(1);
+    expect(results.every((result) => result?._id.toString() === subscriptions[0]._id.toString())).toBe(
+      true,
+    );
+    expect(subscriptions[0].expiresAt.toISOString()).toBe('2026-09-29T00:00:00.000Z');
+    expect(subscriptions[0].sourceOrderIds?.map((value) => value.toString()).sort()).toEqual(
+      sourceOrderIds.map((value) => value.toString()).sort(),
+    );
+  });
+
+  test('extends the latest active current or future subscription in the same tenant', async () => {
+    const UserSubscription = mongoose.models
+      .UserSubscription as mongoose.Model<UserSubscriptionResult>;
+    const user = new mongoose.Types.ObjectId();
+    const sourceOrderId = new mongoose.Types.ObjectId();
+    const now = new Date('2026-05-02T00:00:00.000Z');
+    const tenantless = await UserSubscription.create({
+      user,
+      planKey: 'tenantless-pro',
+      status: 'active',
+      startsAt: new Date('2026-05-01T00:00:00.000Z'),
+      expiresAt: new Date('2026-05-20T00:00:00.000Z'),
+    });
+    const tenantFuture = await UserSubscription.create({
+      user,
+      planKey: 'tenant-pro',
+      status: 'active',
+      startsAt: new Date('2026-05-10T00:00:00.000Z'),
+      expiresAt: new Date('2026-06-01T00:00:00.000Z'),
+      tenantId: 'tenant-a',
+    });
+
+    const extended = await methods.createOrExtendUserSubscription!({
+      user: user.toString(),
+      planKey: 'tenant-pro',
+      durationDays: 30,
+      sourceOrderId,
+      now,
+      tenantId: 'tenant-a',
+    });
+    const afterTenantless = await UserSubscription.findById(tenantless._id).lean().orFail();
+    const afterTenantFuture = await UserSubscription.findById(tenantFuture._id).lean().orFail();
+
+    expect(extended?._id.toString()).toBe(tenantFuture._id.toString());
+    expect(extended?.expiresAt.toISOString()).toBe('2026-07-01T00:00:00.000Z');
+    expect(extended?.sourceOrderId?.toString()).toBe(sourceOrderId.toString());
+    expect(afterTenantless.expiresAt.toISOString()).toBe('2026-05-20T00:00:00.000Z');
+    expect(afterTenantFuture.expiresAt.toISOString()).toBe('2026-07-01T00:00:00.000Z');
   });
 
   test('keeps tenantless quota events separate from tenant-scoped request ids', async () => {

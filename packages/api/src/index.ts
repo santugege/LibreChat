@@ -45,6 +45,8 @@ export * from './files';
 export * from './storage';
 /* Subscriptions */
 export * from './subscriptions/config';
+export * from './subscriptions/payment/easypay';
+export * from './subscriptions/payment/service';
 export * from './subscriptions/quota';
 export * from './subscriptions/types';
 export * from './subscriptions/windows';

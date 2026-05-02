@@ -2,7 +2,10 @@ import type { FilterQuery, Model, Types, UpdateQuery } from 'mongoose';
 import type {
   ISubscriptionPlan,
   IUserSubscription,
+  SubscriptionOrderStatus,
+  SubscriptionPaymentType,
   SubscriptionQuotaKind,
+  ISubscriptionPaymentOrder,
   ISubscriptionUsageEvent,
   ISubscriptionUsageBucket,
 } from '~/types';
@@ -11,6 +14,9 @@ import { runAsSystem } from '~/config/tenantContext';
 type ObjectIdInput = string | Types.ObjectId;
 type UsageField = 'textUsed' | 'imageUsed';
 type RequestIdsField = 'textRequestIds' | 'imageRequestIds';
+const DAY_MS = 24 * 60 * 60 * 1000;
+const FULFILLING_LOCK_TTL_MS = 10 * 60 * 1000;
+const MAX_SUBSCRIPTION_EXTENSION_ATTEMPTS = 10;
 type QuotaEventDimensions = {
   windowStart: Date;
   windowEnd: Date;
@@ -49,6 +55,34 @@ export type ConsumeSubscriptionQuotaResult = {
   used: number;
   limit: number;
   resetAt: Date;
+};
+
+export type CreateSubscriptionPaymentOrderInput = {
+  user: ObjectIdInput;
+  outTradeNo: string;
+  tradeNo?: string;
+  planKey: string;
+  durationDays?: number;
+  amount: number;
+  paymentType: SubscriptionPaymentType;
+  status?: SubscriptionOrderStatus;
+  payUrl?: string;
+  qrCode?: string;
+  expiresAt: Date;
+  tenantId?: string;
+};
+
+export type CreateOrExtendUserSubscriptionInput = {
+  user: ObjectIdInput;
+  planKey: string;
+  durationDays: number;
+  sourceOrderId: ObjectIdInput;
+  now?: Date;
+  tenantId?: string;
+};
+
+export type SubscriptionPaymentOrderLock = {
+  fulfillingAt: Date;
 };
 
 function getTenantFilter(tenantId?: string): { tenantId: string | null } {
@@ -93,6 +127,14 @@ function validateConsumeSubscriptionQuotaInput(input: ConsumeSubscriptionQuotaIn
   }
 }
 
+function validateCreateOrExtendUserSubscriptionInput(
+  input: CreateOrExtendUserSubscriptionInput,
+): void {
+  if (!Number.isInteger(input.durationDays) || input.durationDays < 1) {
+    throw new Error('Invalid subscription duration: durationDays must be a positive integer');
+  }
+}
+
 function getUsageField(kind: SubscriptionQuotaKind): UsageField {
   return kind === 'text' ? 'textUsed' : 'imageUsed';
 }
@@ -132,6 +174,27 @@ function getRequestIdUpdate(
   requestId: string,
 ): Partial<Record<RequestIdsField, string>> {
   return field === 'textRequestIds' ? { textRequestIds: requestId } : { imageRequestIds: requestId };
+}
+
+function getFulfilledSourceOrderFilter(sourceOrderId: Types.ObjectId): FilterQuery<IUserSubscription> {
+  return {
+    $or: [{ sourceOrderId }, { sourceOrderIds: sourceOrderId }],
+  };
+}
+
+function getSourceOrderIdsToAdd(
+  previousSourceOrderId: Types.ObjectId | undefined,
+  sourceOrderId: Types.ObjectId,
+): Types.ObjectId[] {
+  if (!previousSourceOrderId) {
+    return [sourceOrderId];
+  }
+
+  return [previousSourceOrderId, sourceOrderId];
+}
+
+function getFulfillmentKey(user: Types.ObjectId, tenantId: string | null): string {
+  return `${tenantId ?? 'tenantless'}:${user.toString()}`;
 }
 
 function isDuplicateKeyError(error: unknown): boolean {
@@ -432,11 +495,310 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
     });
   }
 
+  async function createSubscriptionPaymentOrder(
+    input: CreateSubscriptionPaymentOrderInput,
+  ): Promise<ISubscriptionPaymentOrder | null> {
+    return await runAsSystem(async () => {
+      const Order = mongoose.models.SubscriptionPaymentOrder as Model<ISubscriptionPaymentOrder>;
+      const order = await Order.create({
+        user: toObjectId(input.user),
+        outTradeNo: input.outTradeNo,
+        ...(input.tradeNo ? { tradeNo: input.tradeNo } : {}),
+        planKey: input.planKey,
+        ...(input.durationDays ? { durationDays: input.durationDays } : {}),
+        amount: input.amount,
+        paymentType: input.paymentType,
+        status: input.status ?? 'pending',
+        ...(input.payUrl ? { payUrl: input.payUrl } : {}),
+        ...(input.qrCode ? { qrCode: input.qrCode } : {}),
+        expiresAt: input.expiresAt,
+        ...getTenantFilter(input.tenantId),
+      });
+
+      return order.toObject() as ISubscriptionPaymentOrder;
+    });
+  }
+
+  async function findSubscriptionPaymentOrderByTradeNo(
+    outTradeNo: string,
+  ): Promise<ISubscriptionPaymentOrder | null> {
+    return await runAsSystem(async () => {
+      const Order = mongoose.models.SubscriptionPaymentOrder as Model<ISubscriptionPaymentOrder>;
+      return (await Order.findOne({ outTradeNo }).lean()) as ISubscriptionPaymentOrder | null;
+    });
+  }
+
+  async function getSubscriptionPaymentOrder(
+    orderId: ObjectIdInput,
+    user: ObjectIdInput,
+    tenantId?: string,
+  ): Promise<ISubscriptionPaymentOrder | null> {
+    return await runAsSystem(async () => {
+      const Order = mongoose.models.SubscriptionPaymentOrder as Model<ISubscriptionPaymentOrder>;
+      return (await Order.findOne({
+        _id: toObjectId(orderId),
+        user: toObjectId(user),
+        ...getTenantFilter(tenantId),
+      }).lean()) as ISubscriptionPaymentOrder | null;
+    });
+  }
+
+  async function markSubscriptionOrderPaid(
+    outTradeNo: string,
+    tradeNo: string,
+    rawNotify: string,
+  ): Promise<ISubscriptionPaymentOrder | null> {
+    return await runAsSystem(async () => {
+      const Order = mongoose.models.SubscriptionPaymentOrder as Model<ISubscriptionPaymentOrder>;
+      return (await Order.findOneAndUpdate(
+        {
+          outTradeNo,
+          status: { $in: ['pending', 'paid'] },
+        },
+        {
+          $set: {
+            status: 'paid',
+            tradeNo,
+            rawNotify,
+            paidAt: new Date(),
+          },
+        },
+        { new: true, runValidators: true },
+      ).lean()) as ISubscriptionPaymentOrder | null;
+    });
+  }
+
+  async function markSubscriptionOrderFulfilling(
+    outTradeNo: string,
+    now = new Date(),
+  ): Promise<SubscriptionPaymentOrderLock | null> {
+    return await runAsSystem(async () => {
+      const Order = mongoose.models.SubscriptionPaymentOrder as Model<ISubscriptionPaymentOrder>;
+      const staleBefore = new Date(now.getTime() - FULFILLING_LOCK_TTL_MS);
+      const updated = (await Order.findOneAndUpdate(
+        {
+          outTradeNo,
+          $or: [
+            { status: { $in: ['paid', 'failed'] } },
+            {
+              status: 'fulfilling',
+              $or: [{ fulfillingAt: { $lte: staleBefore } }, { fulfillingAt: { $exists: false } }],
+            },
+          ],
+        },
+        {
+          $set: {
+            status: 'fulfilling',
+            fulfillingAt: now,
+          },
+          $unset: {
+            failedAt: '',
+            failedReason: '',
+          },
+        },
+        { new: true, runValidators: true },
+      ).lean()) as ISubscriptionPaymentOrder | null;
+
+      if (!updated?.fulfillingAt) {
+        return null;
+      }
+
+      return { fulfillingAt: updated.fulfillingAt };
+    });
+  }
+
+  async function markSubscriptionOrderCompleted(
+    outTradeNo: string,
+    fulfillingAt: Date,
+  ): Promise<ISubscriptionPaymentOrder | null> {
+    return await runAsSystem(async () => {
+      const Order = mongoose.models.SubscriptionPaymentOrder as Model<ISubscriptionPaymentOrder>;
+      return (await Order.findOneAndUpdate(
+        {
+          outTradeNo,
+          status: 'fulfilling',
+          fulfillingAt,
+        },
+        {
+          $set: {
+            status: 'completed',
+            completedAt: new Date(),
+          },
+        },
+        { new: true, runValidators: true },
+      ).lean()) as ISubscriptionPaymentOrder | null;
+    });
+  }
+
+  async function markSubscriptionOrderFailed(
+    outTradeNo: string,
+    reason: string,
+    fulfillingAt: Date,
+  ): Promise<ISubscriptionPaymentOrder | null> {
+    return await runAsSystem(async () => {
+      const Order = mongoose.models.SubscriptionPaymentOrder as Model<ISubscriptionPaymentOrder>;
+      return (await Order.findOneAndUpdate(
+        {
+          outTradeNo,
+          status: 'fulfilling',
+          fulfillingAt,
+        },
+        {
+          $set: {
+            status: 'failed',
+            failedAt: new Date(),
+            failedReason: reason,
+          },
+        },
+        { new: true, runValidators: true },
+      ).lean()) as ISubscriptionPaymentOrder | null;
+    });
+  }
+
+  async function createOrExtendUserSubscription(
+    input: CreateOrExtendUserSubscriptionInput,
+  ): Promise<IUserSubscription | null> {
+    validateCreateOrExtendUserSubscriptionInput(input);
+
+    return await runAsSystem(async () => {
+      const UserSubscription = mongoose.models.UserSubscription as Model<IUserSubscription>;
+      const user = toObjectId(input.user);
+      const sourceOrderId = toObjectId(input.sourceOrderId);
+      const tenantFilter = getTenantFilter(input.tenantId);
+      const now = input.now ?? new Date();
+      const durationMs = input.durationDays * DAY_MS;
+      const fulfillmentKey = getFulfillmentKey(user, tenantFilter.tenantId);
+      const findBySourceOrder = async (): Promise<IUserSubscription | null> =>
+        (await UserSubscription.findOne({
+          ...getFulfilledSourceOrderFilter(sourceOrderId),
+          ...tenantFilter,
+        }).lean()) as IUserSubscription | null;
+      const findByFulfillmentKey = async (): Promise<IUserSubscription | null> =>
+        (await UserSubscription.findOne({
+          fulfillmentKey,
+          ...tenantFilter,
+        }).lean()) as IUserSubscription | null;
+      const extendSubscription = async (
+        subscription: IUserSubscription,
+      ): Promise<IUserSubscription | null> => {
+        const isCurrent =
+          subscription.status === 'active' && subscription.expiresAt.getTime() > now.getTime();
+        const startsAt = isCurrent ? subscription.startsAt : now;
+        const baseExpiresAt = isCurrent ? subscription.expiresAt : now;
+        const expiresAt = new Date(baseExpiresAt.getTime() + durationMs);
+
+        return (await UserSubscription.findOneAndUpdate(
+          {
+            _id: subscription._id,
+            expiresAt: subscription.expiresAt,
+            sourceOrderId: { $ne: sourceOrderId },
+            sourceOrderIds: { $ne: sourceOrderId },
+            ...tenantFilter,
+          },
+          {
+            $set: {
+              planKey: input.planKey,
+              status: 'active',
+              startsAt,
+              expiresAt,
+              sourceOrderId,
+              fulfillmentKey,
+            },
+            $addToSet: {
+              sourceOrderIds: {
+                $each: getSourceOrderIdsToAdd(subscription.sourceOrderId, sourceOrderId),
+              },
+            },
+          },
+          { new: true, runValidators: true },
+        ).lean()) as IUserSubscription | null;
+      };
+
+      for (let attempt = 0; attempt < MAX_SUBSCRIPTION_EXTENSION_ATTEMPTS; attempt++) {
+        const existingSourceOrder = await findBySourceOrder();
+
+        if (existingSourceOrder) {
+          return existingSourceOrder;
+        }
+
+        const fulfilledSubscription = await findByFulfillmentKey();
+        if (fulfilledSubscription) {
+          const updated = await extendSubscription(fulfilledSubscription);
+
+          if (updated) {
+            return updated;
+          }
+
+          continue;
+        }
+
+        const activeSubscription = (await UserSubscription.findOne({
+          user,
+          status: 'active',
+          expiresAt: { $gt: now },
+          ...tenantFilter,
+        })
+          .sort({ expiresAt: -1 })
+          .lean()) as IUserSubscription | null;
+
+        if (!activeSubscription) {
+          try {
+            const subscription = await UserSubscription.create({
+              user,
+              planKey: input.planKey,
+              status: 'active',
+              startsAt: now,
+              expiresAt: new Date(now.getTime() + durationMs),
+              sourceOrderId,
+              sourceOrderIds: [sourceOrderId],
+              fulfillmentKey,
+              ...tenantFilter,
+            });
+
+            return subscription.toObject() as IUserSubscription;
+          } catch (error) {
+            if (!isDuplicateKeyError(error)) {
+              throw error;
+            }
+
+            const existingAfterDuplicate = await findBySourceOrder();
+            if (existingAfterDuplicate) {
+              return existingAfterDuplicate;
+            }
+
+            continue;
+          }
+        }
+
+        const updated = await extendSubscription(activeSubscription);
+
+        if (updated) {
+          return updated;
+        }
+      }
+
+      const existingSourceOrder = await findBySourceOrder();
+      if (existingSourceOrder) {
+        return existingSourceOrder;
+      }
+
+      throw new Error('Subscription fulfillment conflict: retry limit exceeded');
+    });
+  }
+
   return {
     upsertSubscriptionPlan,
     getEnabledSubscriptionPlans,
     findActiveUserSubscription,
     consumeSubscriptionQuota,
+    createSubscriptionPaymentOrder,
+    findSubscriptionPaymentOrderByTradeNo,
+    getSubscriptionPaymentOrder,
+    markSubscriptionOrderPaid,
+    markSubscriptionOrderFulfilling,
+    markSubscriptionOrderCompleted,
+    markSubscriptionOrderFailed,
+    createOrExtendUserSubscription,
   };
 }
 

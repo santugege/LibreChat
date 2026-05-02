@@ -22,6 +22,15 @@ const paymentOrderSchema = new Schema<ISubscriptionPaymentOrder>(
       required: true,
       index: true,
     },
+    durationDays: {
+      type: Number,
+      min: 1,
+      validate: {
+        validator: Number.isInteger,
+        message: 'durationDays must be an integer',
+      },
+      default: undefined,
+    },
     amount: {
       type: Number,
       required: true,
@@ -56,6 +65,10 @@ const paymentOrderSchema = new Schema<ISubscriptionPaymentOrder>(
       index: true,
     },
     paidAt: {
+      type: Date,
+      default: undefined,
+    },
+    fulfillingAt: {
       type: Date,
       default: undefined,
     },

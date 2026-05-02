@@ -37,6 +37,8 @@ export interface IUserSubscription extends Document {
   startsAt: Date;
   expiresAt: Date;
   sourceOrderId?: Types.ObjectId;
+  sourceOrderIds?: Types.ObjectId[];
+  fulfillmentKey?: string;
   tenantId?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
@@ -78,6 +80,7 @@ export interface ISubscriptionPaymentOrder extends Document {
   outTradeNo: string;
   tradeNo?: string;
   planKey: string;
+  durationDays?: number;
   amount: number;
   paymentType: SubscriptionPaymentType;
   status: SubscriptionOrderStatus;
@@ -86,6 +89,7 @@ export interface ISubscriptionPaymentOrder extends Document {
   rawNotify?: string;
   expiresAt: Date;
   paidAt?: Date;
+  fulfillingAt?: Date;
   completedAt?: Date;
   failedAt?: Date;
   failedReason?: string;
