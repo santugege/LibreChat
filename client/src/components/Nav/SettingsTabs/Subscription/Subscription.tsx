@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { SystemRoles } from 'librechat-data-provider';
 import type {
   TCreateSubscriptionOrderRequest,
   TSubscriptionOrder,
@@ -12,6 +13,7 @@ import {
   useGetSubscriptionStatus,
 } from '~/data-provider';
 import { useAuthContext, useLocalize } from '~/hooks';
+import AdminPlanManager from './AdminPlanManager';
 import PlanList from './PlanList';
 import UsageMeter from './UsageMeter';
 
@@ -23,10 +25,11 @@ function isCompletedOrder(order: TSubscriptionOrder | undefined): boolean {
 
 function Subscription() {
   const localize = useLocalize();
-  const { isAuthenticated } = useAuthContext();
+  const { isAuthenticated, user } = useAuthContext();
   const { data: startupConfig } = useGetStartupConfig();
   const paymentConfigured = startupConfig?.subscriptions?.paymentConfigured === true;
   const enabled = isAuthenticated === true && startupConfig?.subscriptions?.enabled === true;
+  const isAdmin = user?.role === SystemRoles.ADMIN;
   const [orderId, setOrderId] = useState('');
 
   const plansQuery = useGetSubscriptionPlans({ enabled });
@@ -109,6 +112,8 @@ function Subscription() {
           onCreateOrder={handleCreateOrder}
         />
       </section>
+
+      {isAdmin && <AdminPlanManager />}
 
       {order?.payUrl && (
         <a
