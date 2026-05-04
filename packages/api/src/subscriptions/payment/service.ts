@@ -384,12 +384,32 @@ async function fetchZPayCreateResponse(
 }
 
 export function createSubscriptionPaymentService(db: SubscriptionPaymentDb) {
-  async function getPlan(planKey: string, tenantId?: string): Promise<SubscriptionPaymentPlan> {
+  async function findPlan(
+    planKey: string,
+    tenantId?: string,
+  ): Promise<SubscriptionPaymentPlan | undefined> {
     const plans = await db.getEnabledSubscriptionPlans(tenantId);
-    const plan = plans.find((item) => item.key === planKey);
+    return plans.find((item) => item.key === planKey);
+  }
 
-    if (!plan) {
+  async function getPlan(planKey: string, tenantId?: string): Promise<SubscriptionPaymentPlan> {
+    const plan = await findPlan(planKey, tenantId);
+
+    if (!plan || !plan.enabled) {
       throw new Error('Subscription plan is not available');
+    }
+
+    return plan;
+  }
+
+  async function getCheckoutPlan(
+    planKey: string,
+    tenantId?: string,
+  ): Promise<SubscriptionPaymentPlan> {
+    const plan = await findPlan(planKey, tenantId);
+
+    if (!plan || !plan.enabled || plan.price <= 0) {
+      throw new Error('Subscription plan is not available for checkout');
     }
 
     return plan;
@@ -413,7 +433,7 @@ export function createSubscriptionPaymentService(db: SubscriptionPaymentDb) {
 
   async function createOrder(input: CreateZPayOrderInput): Promise<CreateZPayOrderResult> {
     const tenantId = getTenantId(input.user.tenantId);
-    const plan = await getPlan(input.body.planKey, tenantId);
+    const plan = await getCheckoutPlan(input.body.planKey, tenantId);
     const apiBase = normalizeZPayApiBase(getRequiredEnv('ZPAY_API_BASE'));
     const pid = getRequiredEnv('ZPAY_PID');
     const pkey = getRequiredEnv('ZPAY_PKEY');

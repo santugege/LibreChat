@@ -374,6 +374,70 @@ describe('createSubscriptionPaymentService', () => {
     expect(createdOrders).toHaveLength(0);
   });
 
+  test('rejects free plans during checkout', async () => {
+    const createdOrders: Parameters<SubscriptionPaymentDb['createSubscriptionPaymentOrder']>[0][] =
+      [];
+    const fetchMock = mockFetch(async () => {
+      return new Response(
+        JSON.stringify({
+          code: 1,
+          trade_no: 'zpay-trade-1',
+          payurl: 'https://zpay.example/pay',
+        }),
+        { headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    const db = createPaymentDb({
+      getEnabledSubscriptionPlans: async () => [{ ...plan, key: 'free', price: 0 }],
+      createSubscriptionPaymentOrder: async (input) => {
+        createdOrders.push(input);
+        return { _id: 'order-id-1' };
+      },
+    });
+
+    await expect(
+      createSubscriptionPaymentService(db).createOrder({
+        user: { id: 'user-1' },
+        body: { planKey: 'free', paymentType: 'alipay' },
+      }),
+    ).rejects.toThrow('Subscription plan is not available for checkout');
+
+    expect(fetchMock).toHaveBeenCalledTimes(0);
+    expect(createdOrders).toHaveLength(0);
+  });
+
+  test('rejects disabled plans during checkout', async () => {
+    const createdOrders: Parameters<SubscriptionPaymentDb['createSubscriptionPaymentOrder']>[0][] =
+      [];
+    const fetchMock = mockFetch(async () => {
+      return new Response(
+        JSON.stringify({
+          code: 1,
+          trade_no: 'zpay-trade-1',
+          payurl: 'https://zpay.example/pay',
+        }),
+        { headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    const db = createPaymentDb({
+      getEnabledSubscriptionPlans: async () => [{ ...plan, enabled: false }],
+      createSubscriptionPaymentOrder: async (input) => {
+        createdOrders.push(input);
+        return { _id: 'order-id-1' };
+      },
+    });
+
+    await expect(
+      createSubscriptionPaymentService(db).createOrder({
+        user: { id: 'user-1' },
+        body: { planKey: 'pro', paymentType: 'wxpay' },
+      }),
+    ).rejects.toThrow('Subscription plan is not available for checkout');
+
+    expect(fetchMock).toHaveBeenCalledTimes(0);
+    expect(createdOrders).toHaveLength(0);
+  });
+
   test('persists the rounded amount sent to ZPay', async () => {
     const createdOrders: Parameters<SubscriptionPaymentDb['createSubscriptionPaymentOrder']>[0][] =
       [];
@@ -468,6 +532,69 @@ describe('createSubscriptionPaymentService', () => {
       planKey: 'pro',
       durationDays: 45,
       sourceOrderId: 'order-id-snapshot',
+      tenantId: 'tenant-a',
+    });
+  });
+
+  test('fulfills legacy paid orders using duration from a current free plan', async () => {
+    const calls: string[] = [];
+    let subscriptionInput: Parameters<SubscriptionPaymentDb['createOrExtendUserSubscription']>[0];
+    const payload = {
+      pid: '1000',
+      trade_no: 'zpay-trade-1',
+      out_trade_no: 'lc_order_legacy',
+      money: '29.50',
+      trade_status: 'TRADE_SUCCESS',
+    };
+    const sign = signEasyPay(payload, 'secret');
+    const rawBody = new URLSearchParams({ ...payload, sign, sign_type: 'MD5' }).toString();
+    const legacyOrder = {
+      _id: 'order-id-legacy',
+      user: 'user-1',
+      outTradeNo: 'lc_order_legacy',
+      planKey: 'pro',
+      amount: 29.5,
+      paymentType: 'alipay' as const,
+      status: 'pending' as const,
+      tenantId: 'tenant-a',
+    };
+    const db = createPaymentDb({
+      getEnabledSubscriptionPlans: async (tenantId) => {
+        calls.push(`plans:${tenantId ?? 'none'}`);
+        return [{ ...plan, price: 0, durationDays: 60 }];
+      },
+      findSubscriptionPaymentOrderByTradeNo: async () => legacyOrder,
+      markSubscriptionOrderPaid: async () => {
+        calls.push('paid');
+        return null;
+      },
+      markSubscriptionOrderFulfilling: async () => {
+        calls.push('fulfilling');
+        return fulfillmentLock;
+      },
+      createOrExtendUserSubscription: async (input) => {
+        subscriptionInput = input;
+        calls.push('subscription');
+        return null;
+      },
+      markSubscriptionOrderCompleted: async (_outTradeNo, fulfillingAt) => {
+        calls.push('completed');
+        expect(fulfillingAt).toEqual(fulfillmentLock.fulfillingAt);
+        return {
+          ...legacyOrder,
+          status: 'completed',
+        };
+      },
+    });
+
+    await createSubscriptionPaymentService(db).handleZPayNotify(rawBody);
+
+    expect(calls).toEqual(['paid', 'fulfilling', 'plans:tenant-a', 'subscription', 'completed']);
+    expect(subscriptionInput!).toEqual({
+      user: 'user-1',
+      planKey: 'pro',
+      durationDays: 60,
+      sourceOrderId: 'order-id-legacy',
       tenantId: 'tenant-a',
     });
   });
