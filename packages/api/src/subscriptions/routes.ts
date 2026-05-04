@@ -42,6 +42,16 @@ type SubscriptionPaymentOrderView = {
 };
 
 type SubscriptionRouteDb = {
+  listSubscriptionPlans: (tenantId?: string) => Promise<SubscriptionPlanView[]>;
+  createSubscriptionPlan: (
+    input: SubscriptionPlanView & { tenantId?: string },
+  ) => Promise<SubscriptionPlanView | null>;
+  updateSubscriptionPlan: (
+    key: string,
+    input: Partial<Omit<SubscriptionPlanView, 'key'>>,
+    tenantId?: string,
+  ) => Promise<SubscriptionPlanView | null>;
+  deleteSubscriptionPlan: (key: string, tenantId?: string) => Promise<SubscriptionPlanView | null>;
   getEnabledSubscriptionPlans: (tenantId?: string) => Promise<SubscriptionPlanView[]>;
   findActiveUserSubscription: (
     user: string,
@@ -80,6 +90,7 @@ type SubscriptionStatusResponse = {
 type CreateSubscriptionRouterDeps = {
   db: SubscriptionRouteDb;
   requireJwtAuth: express.RequestHandler;
+  requireAdminAccess: express.RequestHandler;
   createQuotaService?: (deps: QuotaServiceDeps) => ReturnType<typeof createQuotaService>;
   createPaymentService: (db: SubscriptionRouteDb) => SubscriptionPaymentRouteService;
 };
@@ -87,6 +98,20 @@ type CreateSubscriptionRouterDeps = {
 type StringRecord = {
   [key: string]: string | string[] | number | boolean | null | undefined;
 };
+
+const invalidSubscriptionPlanRequestMessage = 'Invalid subscription plan request';
+const subscriptionPlanCreateKeys = [
+  'key',
+  'name',
+  'description',
+  'price',
+  'durationDays',
+  'textDailyLimit',
+  'imageDailyLimit',
+  'enabled',
+  'sortOrder',
+] as const;
+const subscriptionPlanPatchKeys = subscriptionPlanCreateKeys.filter((key) => key !== 'key');
 
 function isObjectRecord(value: unknown): value is { [key: string]: unknown } {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -128,6 +153,193 @@ function getCreateOrderBody(body: unknown): CreateZPayOrderInput['body'] {
     paymentType,
     ...(typeof isMobile === 'boolean' ? { isMobile } : {}),
   };
+}
+
+function getNonemptyString(record: { [key: string]: unknown }, key: string): string {
+  const value = record[key];
+
+  if (typeof value !== 'string' || !value.trim()) {
+    throwInvalidSubscriptionPlanRequest();
+  }
+
+  return value.trim();
+}
+
+function getOptionalDescription(record: {
+  [key: string]: unknown;
+}): Pick<SubscriptionPlanView, 'description'> {
+  const value = record.description;
+
+  if (value === undefined || value === null) {
+    return {};
+  }
+
+  if (typeof value !== 'string') {
+    throwInvalidSubscriptionPlanRequest();
+  }
+
+  const description = value.trim();
+  return description ? { description } : {};
+}
+
+function getFiniteNumber(record: { [key: string]: unknown }, key: string): number {
+  const value = record[key];
+
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throwInvalidSubscriptionPlanRequest();
+  }
+
+  return value;
+}
+
+function getNonnegativeNumber(record: { [key: string]: unknown }, key: string): number {
+  const value = getFiniteNumber(record, key);
+
+  if (value < 0) {
+    throwInvalidSubscriptionPlanRequest();
+  }
+
+  return value;
+}
+
+function getPositiveInteger(record: { [key: string]: unknown }, key: string): number {
+  const value = getFiniteNumber(record, key);
+
+  if (!Number.isInteger(value) || value <= 0) {
+    throwInvalidSubscriptionPlanRequest();
+  }
+
+  return value;
+}
+
+function getNonnegativeInteger(record: { [key: string]: unknown }, key: string): number {
+  const value = getFiniteNumber(record, key);
+
+  if (!Number.isInteger(value) || value < 0) {
+    throwInvalidSubscriptionPlanRequest();
+  }
+
+  return value;
+}
+
+function getInteger(record: { [key: string]: unknown }, key: string): number {
+  const value = getFiniteNumber(record, key);
+
+  if (!Number.isInteger(value)) {
+    throwInvalidSubscriptionPlanRequest();
+  }
+
+  return value;
+}
+
+function getBoolean(record: { [key: string]: unknown }, key: string): boolean {
+  const value = record[key];
+
+  if (typeof value !== 'boolean') {
+    throwInvalidSubscriptionPlanRequest();
+  }
+
+  return value;
+}
+
+function getSubscriptionPlanBody(body: unknown): SubscriptionPlanView {
+  if (!isObjectRecord(body)) {
+    throwInvalidSubscriptionPlanRequest();
+  }
+
+  assertAllowedKeys(body, subscriptionPlanCreateKeys);
+
+  return {
+    key: getNonemptyString(body, 'key'),
+    name: getNonemptyString(body, 'name'),
+    ...getOptionalDescription(body),
+    price: getNonnegativeNumber(body, 'price'),
+    durationDays: getPositiveInteger(body, 'durationDays'),
+    textDailyLimit: getNonnegativeInteger(body, 'textDailyLimit'),
+    imageDailyLimit: getNonnegativeInteger(body, 'imageDailyLimit'),
+    enabled: getBoolean(body, 'enabled'),
+    sortOrder: getInteger(body, 'sortOrder'),
+  };
+}
+
+function getSubscriptionPlanPatchBody(body: unknown): Partial<Omit<SubscriptionPlanView, 'key'>> {
+  if (!isObjectRecord(body)) {
+    throwInvalidSubscriptionPlanRequest();
+  }
+
+  assertAllowedKeys(body, subscriptionPlanPatchKeys);
+
+  const patch: Partial<Omit<SubscriptionPlanView, 'key'>> = {};
+
+  if (hasOwn(body, 'name')) {
+    patch.name = getNonemptyString(body, 'name');
+  }
+
+  if (hasOwn(body, 'description')) {
+    Object.assign(patch, getOptionalDescription(body));
+  }
+
+  if (hasOwn(body, 'price')) {
+    patch.price = getNonnegativeNumber(body, 'price');
+  }
+
+  if (hasOwn(body, 'durationDays')) {
+    patch.durationDays = getPositiveInteger(body, 'durationDays');
+  }
+
+  if (hasOwn(body, 'textDailyLimit')) {
+    patch.textDailyLimit = getNonnegativeInteger(body, 'textDailyLimit');
+  }
+
+  if (hasOwn(body, 'imageDailyLimit')) {
+    patch.imageDailyLimit = getNonnegativeInteger(body, 'imageDailyLimit');
+  }
+
+  if (hasOwn(body, 'enabled')) {
+    patch.enabled = getBoolean(body, 'enabled');
+  }
+
+  if (hasOwn(body, 'sortOrder')) {
+    patch.sortOrder = getInteger(body, 'sortOrder');
+  }
+
+  return patch;
+}
+
+function hasOwn(record: { [key: string]: unknown }, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function assertAllowedKeys(
+  record: { [key: string]: unknown },
+  allowedKeys: readonly string[],
+): void {
+  Object.keys(record).forEach((key) => {
+    if (!allowedKeys.includes(key)) {
+      throwInvalidSubscriptionPlanRequest();
+    }
+  });
+}
+
+function throwInvalidSubscriptionPlanRequest(): never {
+  throw new Error(invalidSubscriptionPlanRequestMessage);
+}
+
+function isInvalidSubscriptionPlanRequest(error: unknown): boolean {
+  return error instanceof Error && error.message === invalidSubscriptionPlanRequestMessage;
+}
+
+function handleSubscriptionPlanRouteError(
+  error: unknown,
+  res: express.Response,
+  next: express.NextFunction,
+): void {
+  if (isInvalidSubscriptionPlanRequest(error)) {
+    res.status(400).json({ message: invalidSubscriptionPlanRequestMessage });
+    return;
+  }
+
+  next(error);
 }
 
 function getActiveSubscriptionResponse(
@@ -275,6 +487,86 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
       next(error);
     }
   });
+
+  router.get(
+    '/admin/plans',
+    deps.requireJwtAuth,
+    deps.requireAdminAccess,
+    async (req, res, next) => {
+      try {
+        const user = getAuthenticatedUser(req);
+        const plans = await deps.db.listSubscriptionPlans(user.tenantId);
+        res.json(plans);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    '/admin/plans',
+    deps.requireJwtAuth,
+    deps.requireAdminAccess,
+    async (req, res, next) => {
+      try {
+        const user = getAuthenticatedUser(req);
+        const planInput = getSubscriptionPlanBody(req.body);
+        const created = await deps.db.createSubscriptionPlan({
+          ...planInput,
+          ...(user.tenantId ? { tenantId: user.tenantId } : {}),
+        });
+        res.status(201).json(created);
+      } catch (error) {
+        handleSubscriptionPlanRouteError(error, res, next);
+      }
+    },
+  );
+
+  router.patch(
+    '/admin/plans/:key',
+    deps.requireJwtAuth,
+    deps.requireAdminAccess,
+    async (req, res, next) => {
+      try {
+        const user = getAuthenticatedUser(req);
+        const updated = await deps.db.updateSubscriptionPlan(
+          req.params.key,
+          getSubscriptionPlanPatchBody(req.body),
+          user.tenantId,
+        );
+
+        if (!updated) {
+          res.status(404).json({ message: 'Subscription plan not found' });
+          return;
+        }
+
+        res.json(updated);
+      } catch (error) {
+        handleSubscriptionPlanRouteError(error, res, next);
+      }
+    },
+  );
+
+  router.delete(
+    '/admin/plans/:key',
+    deps.requireJwtAuth,
+    deps.requireAdminAccess,
+    async (req, res, next) => {
+      try {
+        const user = getAuthenticatedUser(req);
+        const deleted = await deps.db.deleteSubscriptionPlan(req.params.key, user.tenantId);
+
+        if (!deleted) {
+          res.status(404).json({ message: 'Subscription plan not found' });
+          return;
+        }
+
+        res.json(deleted);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.post(
     '/payment/webhook/zpay',
