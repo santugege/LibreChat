@@ -794,6 +794,7 @@ export const interfaceSchema = z
 export type TInterfaceConfig = z.infer<typeof interfaceSchema>;
 export type TBalanceConfig = z.infer<typeof balanceSchema>;
 export type TTransactionsConfig = z.infer<typeof transactionsSchema>;
+export type TSubscriptionsConfig = z.infer<typeof subscriptionsSchema>;
 
 export const turnstileOptionsSchema = z
   .object({
@@ -818,6 +819,7 @@ export type TStartupConfig = {
   interface?: TInterfaceConfig;
   turnstile?: TTurnstileConfig;
   balance?: TBalanceConfig;
+  subscriptions?: TSubscriptionsConfig;
   transactions?: TTransactionsConfig;
   discordLoginEnabled: boolean;
   facebookLoginEnabled: boolean;
@@ -996,6 +998,11 @@ export const transactionsSchema = z.object({
   enabled: z.boolean().optional().default(true),
 });
 
+export const subscriptionsSchema = z.object({
+  enabled: z.boolean().default(false),
+  paymentConfigured: z.boolean().default(false),
+});
+
 export const memorySchema = z.object({
   disabled: z.boolean().optional(),
   validKeys: z.array(z.string()).optional(),
@@ -1093,6 +1100,7 @@ export const configSchema = z.object({
     })
     .default({ socialLogins: defaultSocialLogins }),
   balance: balanceSchema.optional(),
+  subscriptions: subscriptionsSchema.optional(),
   transactions: transactionsSchema.optional(),
   speech: z
     .object({
@@ -1806,6 +1814,10 @@ export enum SettingsTabValues {
    * Tab for Balance Settings
    */
   BALANCE = 'balance',
+  /**
+   * Tab for Subscription Settings
+   */
+  SUBSCRIPTION = 'subscription',
   /**
    * Tab for Account Settings
    */

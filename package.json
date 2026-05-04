@@ -10,6 +10,7 @@
   ],
   "scripts": {
     "update": "node config/update.js",
+    "seed-subscriptions": "node config/seed-subscription-plans.js",
     "add-balance": "node config/add-balance.js",
     "set-balance": "node config/set-balance.js",
     "list-balances": "node config/list-balances.js",

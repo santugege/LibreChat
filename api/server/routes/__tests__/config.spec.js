@@ -60,6 +60,12 @@ afterEach(() => {
   delete process.env.APP_TITLE;
   delete process.env.CHECK_BALANCE;
   delete process.env.START_BALANCE;
+  delete process.env.SUBSCRIPTIONS_ENABLED;
+  delete process.env.ZPAY_API_BASE;
+  delete process.env.ZPAY_PID;
+  delete process.env.ZPAY_PKEY;
+  delete process.env.ZPAY_NOTIFY_URL;
+  delete process.env.ZPAY_RETURN_URL;
   delete process.env.SANDPACK_BUNDLER_URL;
   delete process.env.SANDPACK_STATIC_BUNDLER_URL;
   delete process.env.CONVERSATION_IMPORT_MAX_FILE_SIZE_BYTES;
@@ -267,6 +273,19 @@ describe('GET /api/config', () => {
       expect(response.body.modelSpecs).toEqual({ list: [{ name: 'test-spec' }] });
       expect(response.body.balance).toEqual({ enabled: true, startBalance: 10000 });
       expect(response.body.webSearch).toEqual({ searchProvider: 'tavily' });
+    });
+
+    it('should include subscription management config', async () => {
+      mockGetAppConfig.mockResolvedValue(baseAppConfig);
+      process.env.SUBSCRIPTIONS_ENABLED = 'true';
+      const app = createApp(mockUser);
+
+      const response = await request(app).get('/api/config');
+
+      expect(response.body.subscriptions).toEqual({
+        enabled: true,
+        paymentConfigured: false,
+      });
     });
 
     it('should include full interface config', async () => {
