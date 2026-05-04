@@ -8,8 +8,6 @@ import { getQuotaWindow } from './windows';
 const config: SubscriptionConfig = {
   enabled: true,
   timezone: 'Asia/Shanghai',
-  freeTextDailyLimit: 20,
-  freeImageDailyLimit: 2,
 };
 
 function plan(overrides: Partial<SubscriptionPlanView> = {}): SubscriptionPlanView {
@@ -93,32 +91,24 @@ describe('getQuotaWindow', () => {
 });
 
 describe('getSubscriptionConfig', () => {
-  test('parses subscription env settings with fallbacks', () => {
+  test('parses subscription enabled and timezone env settings', () => {
     expect(
       getSubscriptionConfig({
         SUBSCRIPTIONS_ENABLED: ' TRUE ',
         SUBSCRIPTION_QUOTA_TIMEZONE: 'America/New_York',
-        SUBSCRIPTION_FREE_TEXT_DAILY_LIMIT: '0',
-        SUBSCRIPTION_FREE_IMAGE_DAILY_LIMIT: 'not-a-number',
       }),
     ).toEqual({
       enabled: true,
       timezone: 'America/New_York',
-      freeTextDailyLimit: 0,
-      freeImageDailyLimit: 2,
     });
 
     expect(
       getSubscriptionConfig({
         SUBSCRIPTIONS_ENABLED: 'false',
-        SUBSCRIPTION_FREE_TEXT_DAILY_LIMIT: '-1',
-        SUBSCRIPTION_FREE_IMAGE_DAILY_LIMIT: 'Infinity',
       }),
     ).toEqual({
       enabled: false,
       timezone: 'Asia/Shanghai',
-      freeTextDailyLimit: 20,
-      freeImageDailyLimit: 2,
     });
   });
 
@@ -130,17 +120,6 @@ describe('getSubscriptionConfig', () => {
     ).toBe('Asia/Shanghai');
   });
 
-  test('falls back for fractional and blank free quota limits', () => {
-    expect(
-      getSubscriptionConfig({
-        SUBSCRIPTION_FREE_TEXT_DAILY_LIMIT: '1.5',
-        SUBSCRIPTION_FREE_IMAGE_DAILY_LIMIT: '   ',
-      }),
-    ).toMatchObject({
-      freeTextDailyLimit: 20,
-      freeImageDailyLimit: 2,
-    });
-  });
 });
 
 describe('createQuotaService', () => {
@@ -235,20 +214,15 @@ describe('createQuotaService', () => {
     expect(result.usage.limit).toBe(100);
   });
 
-  test('uses configured free fallback when database plans omit a free plan', async () => {
+  test('denies quota when no free database plan exists', async () => {
     const paidPlan = plan({ key: 'pro', name: 'Pro', textDailyLimit: 100, imageDailyLimit: 20 });
-    const fallbackConfig: SubscriptionConfig = {
-      ...config,
-      freeTextDailyLimit: 5,
-      freeImageDailyLimit: 1,
-    };
-    let receivedLimit: number | undefined;
+    let consumeCalls = 0;
 
     const deps: QuotaServiceDeps = {
       getPlans: async () => [paidPlan],
       findActiveUserSubscription: async () => null,
       consumeSubscriptionQuota: async (input) => {
-        receivedLimit = input.limit;
+        consumeCalls += 1;
         return {
           allowed: true,
           used: input.amount,
@@ -258,7 +232,7 @@ describe('createQuotaService', () => {
       },
     };
 
-    const service = createQuotaService(deps, fallbackConfig);
+    const service = createQuotaService(deps, config);
     const result = await service.consume({
       userId: 'user-1',
       kind: 'text',
@@ -267,32 +241,41 @@ describe('createQuotaService', () => {
       now: new Date('2026-05-01T18:00:00.000Z'),
     });
 
-    expect(result.allowed).toBe(true);
-    expect(result.plan.key).toBe('free');
-    expect(result.usage.limit).toBe(5);
-    expect(receivedLimit).toBe(5);
+    expect(result.allowed).toBe(false);
+    if (result.allowed) {
+      throw new Error('Expected plan unavailable denial');
+    }
+    expect(result.error).toEqual({
+      type: 'subscription_plan_unavailable',
+      kind: 'text',
+      planKey: 'free',
+      reason: 'missing',
+      resetAt: '2026-05-02T16:00:00.000Z',
+    });
+    expect(result.plan).toBeUndefined();
+    expect(result.usage).toBeUndefined();
+    expect(consumeCalls).toBe(0);
   });
 
-  test('uses configured free fallback when active subscription plan is missing', async () => {
+  test('denies quota when active subscription plan is missing', async () => {
     const paidPlan = plan({ key: 'pro', name: 'Pro', textDailyLimit: 100, imageDailyLimit: 20 });
-    const fallbackConfig: SubscriptionConfig = {
-      ...config,
-      freeTextDailyLimit: 6,
-      freeImageDailyLimit: 2,
-    };
+    let consumeCalls = 0;
 
     const deps: QuotaServiceDeps = {
       getPlans: async () => [paidPlan],
       findActiveUserSubscription: async () => ({ planKey: 'missing-plan' }),
-      consumeSubscriptionQuota: async (input) => ({
-        allowed: true,
-        used: input.amount,
-        limit: input.limit,
-        resetAt: input.windowEnd,
-      }),
+      consumeSubscriptionQuota: async (input) => {
+        consumeCalls += 1;
+        return {
+          allowed: true,
+          used: input.amount,
+          limit: input.limit,
+          resetAt: input.windowEnd,
+        };
+      },
     };
 
-    const service = createQuotaService(deps, fallbackConfig);
+    const service = createQuotaService(deps, config);
     const result = await service.consume({
       userId: 'user-1',
       kind: 'image',
@@ -301,29 +284,41 @@ describe('createQuotaService', () => {
       now: new Date('2026-05-01T18:00:00.000Z'),
     });
 
-    expect(result.allowed).toBe(true);
-    expect(result.plan.key).toBe('free');
-    expect(result.usage.limit).toBe(2);
+    expect(result.allowed).toBe(false);
+    if (result.allowed) {
+      throw new Error('Expected plan unavailable denial');
+    }
+    expect(result.error).toEqual({
+      type: 'subscription_plan_unavailable',
+      kind: 'image',
+      planKey: 'missing-plan',
+      reason: 'missing',
+      resetAt: '2026-05-02T16:00:00.000Z',
+    });
+    expect(result.plan).toBeUndefined();
+    expect(result.usage).toBeUndefined();
+    expect(consumeCalls).toBe(0);
   });
 
-  test('uses a configured free fallback plan when no database plans exist', async () => {
-    const fallbackConfig: SubscriptionConfig = {
-      ...config,
-      freeTextDailyLimit: 7,
-      freeImageDailyLimit: 3,
-    };
+  test('denies quota when free database plan is disabled', async () => {
+    const disabledFreePlan = plan({ enabled: false });
+    let consumeCalls = 0;
+
     const deps: QuotaServiceDeps = {
-      getPlans: async () => [],
+      getPlans: async () => [disabledFreePlan],
       findActiveUserSubscription: async () => null,
-      consumeSubscriptionQuota: async (input) => ({
-        allowed: true,
-        used: input.amount,
-        limit: input.limit,
-        resetAt: input.windowEnd,
-      }),
+      consumeSubscriptionQuota: async (input) => {
+        consumeCalls += 1;
+        return {
+          allowed: true,
+          used: input.amount,
+          limit: input.limit,
+          resetAt: input.windowEnd,
+        };
+      },
     };
 
-    const service = createQuotaService(deps, fallbackConfig);
+    const service = createQuotaService(deps, config);
     const result = await service.consume({
       userId: 'user-1',
       kind: 'image',
@@ -332,12 +327,19 @@ describe('createQuotaService', () => {
       now: new Date('2026-05-01T18:00:00.000Z'),
     });
 
-    expect(result.allowed).toBe(true);
-    expect(result.plan).toMatchObject({
-      key: 'free',
-      textDailyLimit: 7,
-      imageDailyLimit: 3,
+    expect(result.allowed).toBe(false);
+    if (result.allowed) {
+      throw new Error('Expected plan unavailable denial');
+    }
+    expect(result.error).toEqual({
+      type: 'subscription_plan_unavailable',
+      kind: 'image',
+      planKey: 'free',
+      reason: 'disabled',
+      resetAt: '2026-05-02T16:00:00.000Z',
     });
-    expect(result.usage.limit).toBe(3);
+    expect(result.plan).toBeUndefined();
+    expect(result.usage).toBeUndefined();
+    expect(consumeCalls).toBe(0);
   });
 });

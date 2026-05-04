@@ -12,7 +12,7 @@ export type SubscriptionPlanView = {
   sortOrder: number;
 };
 
-export type SubscriptionQuotaError = {
+export type SubscriptionQuotaLimitError = {
   type: 'subscription_quota';
   kind: SubscriptionQuotaKind;
   used: number;
@@ -20,3 +20,15 @@ export type SubscriptionQuotaError = {
   planKey: string;
   resetAt: string;
 };
+
+export type SubscriptionPlanUnavailableError = {
+  type: 'subscription_plan_unavailable';
+  kind: SubscriptionQuotaKind;
+  planKey: string;
+  reason: 'missing' | 'disabled';
+  resetAt: string;
+};
+
+export type SubscriptionQuotaError =
+  | SubscriptionQuotaLimitError
+  | SubscriptionPlanUnavailableError;

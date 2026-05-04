@@ -59,25 +59,25 @@ export type ConsumeQuotaAllowed = {
 
 export type ConsumeQuotaDenied = {
   allowed: false;
-  plan: SubscriptionPlanView;
-  usage: SubscriptionQuotaUsage;
+  plan?: SubscriptionPlanView;
+  usage?: SubscriptionQuotaUsage;
   error: SubscriptionQuotaError;
 };
 
 export type ConsumeQuotaResult = ConsumeQuotaAllowed | ConsumeQuotaDenied;
 
-function createFreePlan(config: SubscriptionConfig): SubscriptionPlanView {
-  return {
-    key: 'free',
-    name: 'Free',
-    price: 0,
-    durationDays: 0,
-    textDailyLimit: config.freeTextDailyLimit,
-    imageDailyLimit: config.freeImageDailyLimit,
-    enabled: true,
-    sortOrder: 0,
-  };
-}
+type PlanUnavailableReason = 'missing' | 'disabled';
+
+type PlanResolution =
+  | {
+      available: true;
+      plan: SubscriptionPlanView;
+    }
+  | {
+      available: false;
+      planKey: string;
+      reason: PlanUnavailableReason;
+    };
 
 function getLimit(plan: SubscriptionPlanView, kind: SubscriptionQuotaKind): number {
   return kind === 'text' ? plan.textDailyLimit : plan.imageDailyLimit;
@@ -101,6 +101,35 @@ function createUsage(
   };
 }
 
+function getPlanResolution(
+  plans: SubscriptionPlanView[],
+  activeSubscription: { planKey: string } | null,
+): PlanResolution {
+  const planKey = activeSubscription?.planKey ?? 'free';
+  const plan = plans.find((value) => value.key === planKey);
+
+  if (!plan) {
+    return {
+      available: false,
+      planKey,
+      reason: 'missing',
+    };
+  }
+
+  if (!plan.enabled) {
+    return {
+      available: false,
+      planKey,
+      reason: 'disabled',
+    };
+  }
+
+  return {
+    available: true,
+    plan,
+  };
+}
+
 export function createQuotaService(
   deps: QuotaServiceDeps,
   config: SubscriptionConfig = getSubscriptionConfig(),
@@ -114,15 +143,13 @@ export function createQuotaService(
       deps.getPlans(tenantId),
       deps.findActiveUserSubscription(userId, now, tenantId),
     ]);
-    const fallbackFreePlan = createFreePlan(config);
-    const activePlan = activeSubscription
-      ? plans.find((plan) => plan.key === activeSubscription.planKey)
-      : undefined;
-    if (activeSubscription) {
-      return activePlan ?? fallbackFreePlan;
+    const resolution = getPlanResolution(plans, activeSubscription);
+
+    if (!resolution.available) {
+      throw new Error(`Subscription plan is unavailable: ${resolution.planKey}`);
     }
 
-    return plans.find((plan) => plan.key === 'free') ?? fallbackFreePlan;
+    return resolution.plan;
   }
 
   async function consume(input: ConsumeQuotaInput): Promise<ConsumeQuotaResult> {
@@ -130,9 +157,28 @@ export function createQuotaService(
 
     const now = input.now ?? new Date();
     const timezone = input.timezone ?? config.timezone;
-    const plan = await resolvePlan(input.userId, now, input.tenantId);
-    const limit = getLimit(plan, input.kind);
+    const [plans, activeSubscription] = await Promise.all([
+      deps.getPlans(input.tenantId),
+      deps.findActiveUserSubscription(input.userId, now, input.tenantId),
+    ]);
+    const planResolution = getPlanResolution(plans, activeSubscription);
     const window = getQuotaWindow(now, timezone);
+
+    if (!planResolution.available) {
+      return {
+        allowed: false,
+        error: {
+          type: 'subscription_plan_unavailable',
+          kind: input.kind,
+          planKey: planResolution.planKey,
+          reason: planResolution.reason,
+          resetAt: window.windowEnd.toISOString(),
+        },
+      };
+    }
+
+    const plan = planResolution.plan;
+    const limit = getLimit(plan, input.kind);
     const quotaInput: ConsumeSubscriptionQuotaInput = {
       user: input.userId,
       kind: input.kind,

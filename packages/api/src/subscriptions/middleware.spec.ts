@@ -173,8 +173,6 @@ describe('createTextQuotaMiddleware', () => {
       ...originalEnv,
       SUBSCRIPTIONS_ENABLED: 'true',
       SUBSCRIPTION_QUOTA_TIMEZONE: 'America/New_York',
-      SUBSCRIPTION_FREE_TEXT_DAILY_LIMIT: '20',
-      SUBSCRIPTION_FREE_IMAGE_DAILY_LIMIT: '2',
     };
     jest.useFakeTimers().setSystemTime(new Date('2026-05-02T01:30:00.000Z'));
   });
@@ -606,6 +604,48 @@ describe('createTextQuotaMiddleware', () => {
     });
   });
 
+  test('forwards a structured plan unavailable error in chat format', async () => {
+    const resetAt = '2026-05-02T04:00:00.000Z';
+    let consumeCalls = 0;
+    const db = createDb({
+      getEnabledSubscriptionPlans: async () => [],
+      consumeSubscriptionQuota: async (input) => {
+        consumeCalls += 1;
+        return {
+          allowed: true,
+          used: input.amount,
+          limit: input.limit,
+          resetAt: input.windowEnd,
+        };
+      },
+    });
+    const app = createApp(db, { id: 'user-1' });
+
+    const response = await requestApp(app, { messageId: 'message-plan-missing' });
+    const body = await readJson<{
+      type: string;
+      text: string;
+      kind: string;
+      planKey: string;
+      reason: string;
+      resetAt: string;
+    }>(response);
+    const error = {
+      type: 'subscription_plan_unavailable',
+      kind: 'text',
+      planKey: 'free',
+      reason: 'missing',
+      resetAt,
+    };
+
+    expect(response.status).toBe(429);
+    expect(body).toEqual({
+      ...error,
+      text: JSON.stringify(error),
+    });
+    expect(consumeCalls).toBe(0);
+  });
+
   test('formats quota denial with an OpenAI-compatible error envelope when requested', async () => {
     const resetAt = new Date('2026-05-02T04:00:00.000Z');
     const db = createDb({
@@ -665,6 +705,64 @@ describe('createTextQuotaMiddleware', () => {
         resetAt: resetAt.toISOString(),
       },
     });
+  });
+
+  test('formats plan unavailable with an OpenAI-compatible error envelope when requested', async () => {
+    const resetAt = '2026-05-02T04:00:00.000Z';
+    let consumeCalls = 0;
+    const db = createDb({
+      getEnabledSubscriptionPlans: async () => [],
+      consumeSubscriptionQuota: async (input) => {
+        consumeCalls += 1;
+        return {
+          allowed: true,
+          used: input.amount,
+          limit: input.limit,
+          resetAt: input.windowEnd,
+        };
+      },
+    });
+    const app = createApiApp(db, 'openai', { id: 'user-1' });
+
+    const response = await requestApp(app, { messageId: 'message-plan-missing' });
+    const body = await readJson<{
+      error: {
+        message: string;
+        type: string;
+        param: null;
+        code: string;
+      };
+      type: string;
+      text: string;
+      subscriptionQuota: {
+        type: string;
+        kind: string;
+        planKey: string;
+        reason: string;
+        resetAt: string;
+      };
+    }>(response);
+    const error = {
+      type: 'subscription_plan_unavailable',
+      kind: 'text',
+      planKey: 'free',
+      reason: 'missing',
+      resetAt,
+    };
+
+    expect(response.status).toBe(429);
+    expect(body).toEqual({
+      error: {
+        message: 'Subscription plan free is missing.',
+        type: 'invalid_request_error',
+        param: null,
+        code: 'subscription_plan_unavailable',
+      },
+      type: 'subscription_plan_unavailable',
+      text: JSON.stringify(error),
+      subscriptionQuota: error,
+    });
+    expect(consumeCalls).toBe(0);
   });
 
   test('formats quota denial with an Open Responses-compatible error envelope when requested', async () => {

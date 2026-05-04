@@ -35,14 +35,14 @@ type SubscriptionQuotaChatErrorBody = SubscriptionQuotaError & {
 };
 
 type SubscriptionQuotaApiErrorBody = {
-  type: 'subscription_quota';
+  type: SubscriptionQuotaError['type'];
   text: string;
   subscriptionQuota: SubscriptionQuotaError;
   error: {
     message: string;
-    type: 'rate_limit_error' | 'too_many_requests';
+    type: 'invalid_request_error' | 'rate_limit_error' | 'too_many_requests';
     param: null;
-    code: 'subscription_quota';
+    code: SubscriptionQuotaError['type'];
   };
 };
 
@@ -112,7 +112,22 @@ function getRequestId(
 }
 
 function createQuotaMessage(error: SubscriptionQuotaError): string {
+  if (error.type === 'subscription_plan_unavailable') {
+    return `Subscription plan ${error.planKey} is ${error.reason}.`;
+  }
+
   return `Daily ${error.kind} quota reached for the ${error.planKey} plan. Used ${error.used} of ${error.limit}. Resets at ${error.resetAt}.`;
+}
+
+function getQuotaApiErrorType(
+  error: SubscriptionQuotaError,
+  errorFormat: TextQuotaErrorFormat,
+): 'invalid_request_error' | 'rate_limit_error' | 'too_many_requests' {
+  if (error.type === 'subscription_plan_unavailable') {
+    return 'invalid_request_error';
+  }
+
+  return errorFormat === 'openai' ? 'rate_limit_error' : 'too_many_requests';
 }
 
 function createQuotaErrorBody(
@@ -128,14 +143,14 @@ function createQuotaErrorBody(
   }
 
   return {
-    type: 'subscription_quota',
+    type: error.type,
     text,
     subscriptionQuota: error,
     error: {
       message: createQuotaMessage(error),
-      type: errorFormat === 'openai' ? 'rate_limit_error' : 'too_many_requests',
+      type: getQuotaApiErrorType(error, errorFormat),
       param: null,
-      code: 'subscription_quota',
+      code: error.type,
     },
   };
 }
