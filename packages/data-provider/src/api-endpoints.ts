@@ -50,6 +50,9 @@ export const subscriptionStatus = () => `${subscriptions()}/me`;
 export const subscriptionOrders = () => `${subscriptions()}/orders`;
 export const subscriptionOrder = (orderId: string) =>
   `${subscriptionOrders()}/${encodeURIComponent(orderId)}`;
+export const subscriptionAdminPlans = () => `${subscriptions()}/admin/plans`;
+export const subscriptionAdminPlan = (planKey: string) =>
+  `${subscriptionAdminPlans()}/${encodeURIComponent(planKey)}`;
 
 export const userPlugins = () => `${BASE_URL}/api/user/plugins`;
 

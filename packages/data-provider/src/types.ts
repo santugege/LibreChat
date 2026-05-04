@@ -417,6 +417,10 @@ export type TSubscriptionPlan = {
   sortOrder: number;
 };
 
+export type TCreateSubscriptionPlanRequest = TSubscriptionPlan;
+
+export type TUpdateSubscriptionPlanRequest = Partial<Omit<TSubscriptionPlan, 'key'>>;
+
 export type TSubscriptionUsage = {
   windowKey: string;
   resetAt: string;

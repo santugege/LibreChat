@@ -2,6 +2,8 @@
  * @jest-environment jsdom
  */
 import {
+  subscriptionAdminPlan,
+  subscriptionAdminPlans,
   subscriptionOrder,
   subscriptionOrders,
   subscriptionPlans,
@@ -9,10 +11,14 @@ import {
   subscriptions,
 } from '../src/api-endpoints';
 import {
+  createSubscriptionAdminPlan,
   createSubscriptionOrder,
+  deleteSubscriptionAdminPlan,
+  getSubscriptionAdminPlans,
   getSubscriptionOrder,
   getSubscriptionPlans,
   getSubscriptionStatus,
+  updateSubscriptionAdminPlan,
 } from '../src/data-service';
 import { QueryKeys } from '../src/keys';
 import request from '../src/request';
@@ -24,6 +30,8 @@ describe('subscription API contract', () => {
     expect(subscriptionPlans()).toBe('/api/subscriptions/plans');
     expect(subscriptionStatus()).toBe('/api/subscriptions/me');
     expect(subscriptionOrders()).toBe('/api/subscriptions/orders');
+    expect(subscriptionAdminPlans()).toBe('/api/subscriptions/admin/plans');
+    expect(subscriptionAdminPlan('free plan')).toBe('/api/subscriptions/admin/plans/free%20plan');
     expect(subscriptionOrder('order/id with spaces')).toBe(
       '/api/subscriptions/orders/order%2Fid%20with%20spaces',
     );
@@ -33,6 +41,7 @@ describe('subscription API contract', () => {
     expect(QueryKeys.subscriptionPlans).toBe('subscriptionPlans');
     expect(QueryKeys.subscriptionStatus).toBe('subscriptionStatus');
     expect(QueryKeys.subscriptionOrder).toBe('subscriptionOrder');
+    expect(QueryKeys.subscriptionAdminPlans).toBe('subscriptionAdminPlans');
   });
 
   it('accepts subscription status without an active subscription', () => {
@@ -91,6 +100,20 @@ describe('subscription API contract', () => {
       paymentType: 'alipay',
       isMobile: true,
     };
+    const createPlanPayload: t.TCreateSubscriptionPlanRequest = {
+      key: 'team',
+      name: 'Team',
+      price: 99,
+      durationDays: 30,
+      textDailyLimit: 1000,
+      imageDailyLimit: 100,
+      enabled: true,
+      sortOrder: 20,
+    };
+    const updatePlanPayload: t.TUpdateSubscriptionPlanRequest = {
+      enabled: false,
+      textDailyLimit: 500,
+    };
     const createdOrder: t.TCreateSubscriptionOrderResponse = {
       orderId: 'order-1',
       outTradeNo: 'trade-1',
@@ -108,12 +131,27 @@ describe('subscription API contract', () => {
     getSpy.mockResolvedValueOnce([plan]);
     getSpy.mockResolvedValueOnce(status);
     getSpy.mockResolvedValueOnce(order);
-    const postSpy = jest.spyOn(request, 'post').mockResolvedValueOnce(createdOrder);
+    getSpy.mockResolvedValueOnce([createPlanPayload]);
+    const postSpy = jest.spyOn(request, 'post');
+    postSpy.mockResolvedValueOnce(createdOrder);
+    postSpy.mockResolvedValueOnce(createPlanPayload);
+    const patchSpy = jest.spyOn(request, 'patch').mockResolvedValueOnce({
+      ...createPlanPayload,
+      ...updatePlanPayload,
+    });
+    const deleteSpy = jest.spyOn(request, 'delete').mockResolvedValueOnce(createPlanPayload);
 
     await expect(getSubscriptionPlans()).resolves.toEqual([plan]);
     await expect(getSubscriptionStatus()).resolves.toEqual(status);
     await expect(createSubscriptionOrder(payload)).resolves.toEqual(createdOrder);
     await expect(getSubscriptionOrder('order/id with spaces')).resolves.toEqual(order);
+    await expect(getSubscriptionAdminPlans()).resolves.toEqual([createPlanPayload]);
+    await expect(createSubscriptionAdminPlan(createPlanPayload)).resolves.toEqual(createPlanPayload);
+    await expect(updateSubscriptionAdminPlan('free plan', updatePlanPayload)).resolves.toEqual({
+      ...createPlanPayload,
+      ...updatePlanPayload,
+    });
+    await expect(deleteSubscriptionAdminPlan('free plan')).resolves.toEqual(createPlanPayload);
 
     expect(getSpy).toHaveBeenNthCalledWith(1, '/api/subscriptions/plans');
     expect(getSpy).toHaveBeenNthCalledWith(2, '/api/subscriptions/me');
@@ -121,6 +159,17 @@ describe('subscription API contract', () => {
       3,
       '/api/subscriptions/orders/order%2Fid%20with%20spaces',
     );
-    expect(postSpy).toHaveBeenCalledWith('/api/subscriptions/orders', payload);
+    expect(getSpy).toHaveBeenNthCalledWith(4, '/api/subscriptions/admin/plans');
+    expect(postSpy).toHaveBeenNthCalledWith(1, '/api/subscriptions/orders', payload);
+    expect(postSpy).toHaveBeenNthCalledWith(
+      2,
+      '/api/subscriptions/admin/plans',
+      createPlanPayload,
+    );
+    expect(patchSpy).toHaveBeenCalledWith(
+      '/api/subscriptions/admin/plans/free%20plan',
+      updatePlanPayload,
+    );
+    expect(deleteSpy).toHaveBeenCalledWith('/api/subscriptions/admin/plans/free%20plan');
   });
 });

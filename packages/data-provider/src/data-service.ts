@@ -135,6 +135,27 @@ export function getSubscriptionOrder(orderId: string): Promise<t.TSubscriptionOr
   return request.get(endpoints.subscriptionOrder(orderId));
 }
 
+export function getSubscriptionAdminPlans(): Promise<t.TSubscriptionPlan[]> {
+  return request.get(endpoints.subscriptionAdminPlans());
+}
+
+export function createSubscriptionAdminPlan(
+  payload: t.TCreateSubscriptionPlanRequest,
+): Promise<t.TSubscriptionPlan> {
+  return request.post(endpoints.subscriptionAdminPlans(), payload);
+}
+
+export function updateSubscriptionAdminPlan(
+  planKey: string,
+  payload: t.TUpdateSubscriptionPlanRequest,
+): Promise<t.TSubscriptionPlan> {
+  return request.patch(endpoints.subscriptionAdminPlan(planKey), payload);
+}
+
+export function deleteSubscriptionAdminPlan(planKey: string): Promise<t.TSubscriptionPlan> {
+  return request.delete(endpoints.subscriptionAdminPlan(planKey));
+}
+
 export const updateTokenCount = (text: string) => {
   return request.post(endpoints.tokenizer(), { arg: text });
 };
