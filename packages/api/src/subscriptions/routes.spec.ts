@@ -351,7 +351,7 @@ describe('createSubscriptionRouter', () => {
       tenantId?: string;
     }> = [];
     const deletedPlans: Array<{ key: string; tenantId?: string }> = [];
-    const patch = { name: 'Updated Free', enabled: false };
+    const patch = { name: 'Updated Free', description: '', enabled: false };
     const app = createApp({
       db: createDb({
         listSubscriptionPlans: async (tenantId?: string) => {
@@ -406,7 +406,14 @@ describe('createSubscriptionRouter', () => {
     expect(createdPlans).toEqual([{ ...allPlans[1], tenantId: 'tenant-a' }]);
 
     expect(updateResponse.status).toBe(200);
-    expect(updatedPlans).toEqual([{ key: 'free', input: patch, tenantId: 'tenant-a' }]);
+    expect(updatedPlans).toEqual([
+      {
+        key: 'free',
+        input: { name: 'Updated Free', description: undefined, enabled: false },
+        tenantId: 'tenant-a',
+      },
+    ]);
+    expect(updatedPlans[0].input).toHaveProperty('description', undefined);
 
     expect(deleteResponse.status).toBe(200);
     expect(deletedPlans).toEqual([{ key: 'free', tenantId: 'tenant-a' }]);

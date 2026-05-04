@@ -23,7 +23,7 @@ jest.setTimeout(60000);
 type SubscriptionPlanInput = {
   key: string;
   name: string;
-  description?: string;
+  description?: string | undefined;
   price: number;
   durationDays: number;
   textDailyLimit: number;
@@ -316,6 +316,31 @@ describe('subscription methods', () => {
     expect(updated).toMatchObject({ key: 'free', enabled: true, textDailyLimit: 25, sortOrder: 5 });
     expect(deleted?.key).toBe('pro');
     expect(afterDelete.map((plan) => plan.key)).toEqual(['free']);
+  });
+
+  test('admin plan updates can clear descriptions', async () => {
+    await methods.createSubscriptionPlan!({
+      key: 'team',
+      name: 'Team',
+      description: 'Team plan',
+      price: 99,
+      durationDays: 30,
+      textDailyLimit: 1000,
+      imageDailyLimit: 100,
+      enabled: true,
+      sortOrder: 20,
+    });
+
+    const updated = await methods.updateSubscriptionPlan!('team', {
+      description: undefined,
+    });
+
+    expect(updated?.description).toBeUndefined();
+    await expect(methods.getSubscriptionPlan!('team')).resolves.toMatchObject({
+      key: 'team',
+      name: 'Team',
+    });
+    await expect(methods.getSubscriptionPlan!('team')).resolves.not.toHaveProperty('description');
   });
 
   test('admin plan CRUD honors explicit tenant filters', async () => {

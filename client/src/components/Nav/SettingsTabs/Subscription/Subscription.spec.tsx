@@ -40,6 +40,7 @@ const plans: TSubscriptionPlan[] = [
   {
     key: 'free',
     name: 'Free',
+    description: 'Free plan',
     price: 0,
     durationDays: 30,
     textDailyLimit: 20,
@@ -201,6 +202,31 @@ describe('Subscription settings tab', () => {
     expect(mockDeleteSubscriptionAdminPlan).toHaveBeenCalledWith(
       'free',
       expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
+  });
+
+  it('sends an empty description when clearing an admin subscription plan description', () => {
+    mockUseAuthContext.mockReturnValue({
+      isAuthenticated: true,
+      user: { role: SystemRoles.ADMIN },
+    });
+
+    render(<Subscription />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Free/ }));
+    fireEvent.change(screen.getByLabelText('com_nav_subscription_admin_description'), {
+      target: { value: '' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'com_nav_subscription_admin_save' }));
+
+    expect(mockUpdateSubscriptionAdminPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        planKey: 'free',
+        payload: expect.objectContaining({ description: '' }),
+      }),
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+      }),
     );
   });
 

@@ -60,12 +60,12 @@ function formFromPlan(plan: TSubscriptionPlan): PlanFormState {
   };
 }
 
-function payloadFromForm(form: PlanFormState): TSubscriptionPlan {
+function payloadFromForm(form: PlanFormState, includeEmptyDescription: boolean): TSubscriptionPlan {
   const description = form.description.trim();
   return {
     key: form.key.trim(),
     name: form.name.trim(),
-    ...(description ? { description } : {}),
+    ...(description || includeEmptyDescription ? { description } : {}),
     price: parseFiniteNumber(form.price),
     durationDays: parseFiniteNumber(form.durationDays),
     textDailyLimit: parseFiniteNumber(form.textDailyLimit),
@@ -132,7 +132,7 @@ function AdminPlanManager() {
       return;
     }
 
-    const payload = payloadFromForm(draft);
+    const payload = payloadFromForm(draft, Boolean(editingKey));
     if (editingKey) {
       const { key: _key, ...patch } = payload;
       updatePlan.mutate({ planKey: editingKey, payload: patch }, { onSuccess: resetForm });

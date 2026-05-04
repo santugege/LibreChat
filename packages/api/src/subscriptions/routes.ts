@@ -182,6 +182,23 @@ function getOptionalDescription(record: {
   return description ? { description } : {};
 }
 
+function getPatchDescription(record: {
+  [key: string]: unknown;
+}): { description?: string | undefined } {
+  const value = record.description;
+
+  if (value === undefined || value === null) {
+    return { description: undefined };
+  }
+
+  if (typeof value !== 'string') {
+    throwInvalidSubscriptionPlanRequest();
+  }
+
+  const description = value.trim();
+  return { description: description || undefined };
+}
+
 function getFiniteNumber(record: { [key: string]: unknown }, key: string): number {
   const value = record[key];
 
@@ -276,7 +293,7 @@ function getSubscriptionPlanPatchBody(body: unknown): Partial<Omit<SubscriptionP
   }
 
   if (hasOwn(body, 'description')) {
-    Object.assign(patch, getOptionalDescription(body));
+    Object.assign(patch, getPatchDescription(body));
   }
 
   if (hasOwn(body, 'price')) {

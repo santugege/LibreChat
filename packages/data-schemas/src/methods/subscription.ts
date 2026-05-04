@@ -34,7 +34,7 @@ export type UpsertSubscriptionPlanInput = Pick<
   | 'enabled'
   | 'sortOrder'
 > & {
-  description?: string;
+  description?: string | undefined;
   tenantId?: string;
 };
 
@@ -347,9 +347,24 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
   ): Promise<ISubscriptionPlan | null> {
     return await runAsSystem(async () => {
       const SubscriptionPlan = mongoose.models.SubscriptionPlan as Model<ISubscriptionPlan>;
+      const { description, ...setInput } = input;
+      const update: UpdateQuery<ISubscriptionPlan> = {};
+
+      if (Object.keys(setInput).length > 0) {
+        update.$set = setInput;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(input, 'description')) {
+        if (description === undefined) {
+          update.$unset = { description: '' };
+        } else {
+          update.$set = { ...(update.$set ?? {}), description };
+        }
+      }
+
       return (await SubscriptionPlan.findOneAndUpdate(
         { key, ...getTenantFilter(tenantId) },
-        { $set: input },
+        update,
         { new: true, runValidators: true },
       ).lean()) as ISubscriptionPlan | null;
     });
