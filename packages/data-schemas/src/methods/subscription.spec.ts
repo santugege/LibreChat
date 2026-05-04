@@ -148,6 +148,21 @@ type SubscriptionUsageEventResult = {
 
 type SubscriptionTestMethods = {
   upsertSubscriptionPlan: (input: SubscriptionPlanInput) => Promise<SubscriptionPlanResult | null>;
+  listSubscriptionPlans: (tenantId?: string) => Promise<SubscriptionPlanResult[]>;
+  getSubscriptionPlan: (
+    key: string,
+    tenantId?: string,
+  ) => Promise<SubscriptionPlanResult | null>;
+  createSubscriptionPlan: (input: SubscriptionPlanInput) => Promise<SubscriptionPlanResult | null>;
+  updateSubscriptionPlan: (
+    key: string,
+    input: Partial<Omit<SubscriptionPlanInput, 'key' | 'tenantId'>>,
+    tenantId?: string,
+  ) => Promise<SubscriptionPlanResult | null>;
+  deleteSubscriptionPlan: (
+    key: string,
+    tenantId?: string,
+  ) => Promise<SubscriptionPlanResult | null>;
   getEnabledSubscriptionPlans: (tenantId?: string) => Promise<SubscriptionPlanResult[]>;
   findActiveUserSubscription: (
     user: string,
@@ -263,6 +278,84 @@ describe('subscription methods', () => {
     expect(plans.map((plan) => plan.key)).toEqual(['starter', 'pro']);
     expect(plans[0].textDailyLimit).toBe(50);
     expect(plans[1].imageDailyLimit).toBe(50);
+  });
+
+  test('lists, reads, updates, and deletes all subscription plans for admin management', async () => {
+    await methods.createSubscriptionPlan!({
+      key: 'free',
+      name: 'Free',
+      price: 0,
+      durationDays: 30,
+      textDailyLimit: 20,
+      imageDailyLimit: 2,
+      enabled: false,
+      sortOrder: 0,
+    });
+    await methods.createSubscriptionPlan!({
+      key: 'pro',
+      name: 'Pro',
+      price: 29,
+      durationDays: 30,
+      textDailyLimit: 200,
+      imageDailyLimit: 50,
+      enabled: true,
+      sortOrder: 10,
+    });
+
+    const allPlans = await methods.listSubscriptionPlans!();
+    const free = await methods.getSubscriptionPlan!('free');
+    const updated = await methods.updateSubscriptionPlan!(
+      'free',
+      { enabled: true, textDailyLimit: 25, sortOrder: 5 },
+    );
+    const deleted = await methods.deleteSubscriptionPlan!('pro');
+    const afterDelete = await methods.listSubscriptionPlans!();
+
+    expect(allPlans.map((plan) => plan.key)).toEqual(['free', 'pro']);
+    expect(free?.enabled).toBe(false);
+    expect(updated).toMatchObject({ key: 'free', enabled: true, textDailyLimit: 25, sortOrder: 5 });
+    expect(deleted?.key).toBe('pro');
+    expect(afterDelete.map((plan) => plan.key)).toEqual(['free']);
+  });
+
+  test('admin plan CRUD honors explicit tenant filters', async () => {
+    await methods.createSubscriptionPlan!({
+      key: 'free',
+      name: 'Tenantless Free',
+      price: 0,
+      durationDays: 30,
+      textDailyLimit: 20,
+      imageDailyLimit: 2,
+      enabled: true,
+      sortOrder: 0,
+    });
+    await methods.createSubscriptionPlan!({
+      key: 'free',
+      name: 'Tenant Free',
+      price: 0,
+      durationDays: 30,
+      textDailyLimit: 40,
+      imageDailyLimit: 4,
+      enabled: true,
+      sortOrder: 0,
+      tenantId: 'tenant-a',
+    });
+
+    const tenantless = await methods.getSubscriptionPlan!('free');
+    const tenant = await methods.getSubscriptionPlan!('free', 'tenant-a');
+    await methods.updateSubscriptionPlan!('free', { name: 'Updated Tenant Free' }, 'tenant-a');
+
+    expect(tenantless?.name).toBe('Tenantless Free');
+    expect(tenant?.textDailyLimit).toBe(40);
+    await expect(methods.getSubscriptionPlan!('free', 'tenant-a')).resolves.toMatchObject({
+      name: 'Updated Tenant Free',
+    });
+    await expect(methods.deleteSubscriptionPlan!('free', 'tenant-a')).resolves.toMatchObject({
+      tenantId: 'tenant-a',
+    });
+    await expect(methods.getSubscriptionPlan!('free')).resolves.toMatchObject({
+      name: 'Tenantless Free',
+    });
   });
 
   test('consumes subscription quota until the limit is reached', async () => {

@@ -38,6 +38,12 @@ export type UpsertSubscriptionPlanInput = Pick<
   tenantId?: string;
 };
 
+export type CreateSubscriptionPlanInput = UpsertSubscriptionPlanInput;
+
+export type UpdateSubscriptionPlanInput = Partial<
+  Omit<UpsertSubscriptionPlanInput, 'key' | 'tenantId'>
+>;
+
 export type ConsumeSubscriptionQuotaInput = {
   user: ObjectIdInput;
   kind: SubscriptionQuotaKind;
@@ -296,6 +302,69 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
       })
         .sort({ sortOrder: 1, price: 1 })
         .lean()) as ISubscriptionPlan[];
+    });
+  }
+
+  async function listSubscriptionPlans(tenantId?: string): Promise<ISubscriptionPlan[]> {
+    return await runAsSystem(async () => {
+      const SubscriptionPlan = mongoose.models.SubscriptionPlan as Model<ISubscriptionPlan>;
+      return (await SubscriptionPlan.find(getTenantFilter(tenantId))
+        .sort({ sortOrder: 1, price: 1, key: 1 })
+        .lean()) as ISubscriptionPlan[];
+    });
+  }
+
+  async function getSubscriptionPlan(
+    key: string,
+    tenantId?: string,
+  ): Promise<ISubscriptionPlan | null> {
+    return await runAsSystem(async () => {
+      const SubscriptionPlan = mongoose.models.SubscriptionPlan as Model<ISubscriptionPlan>;
+      return (await SubscriptionPlan.findOne({
+        key,
+        ...getTenantFilter(tenantId),
+      }).lean()) as ISubscriptionPlan | null;
+    });
+  }
+
+  async function createSubscriptionPlan(
+    input: CreateSubscriptionPlanInput,
+  ): Promise<ISubscriptionPlan | null> {
+    return await runAsSystem(async () => {
+      const SubscriptionPlan = mongoose.models.SubscriptionPlan as Model<ISubscriptionPlan>;
+      const plan = await SubscriptionPlan.create({
+        ...input,
+        ...getTenantFilter(input.tenantId),
+      });
+      return plan.toObject() as ISubscriptionPlan;
+    });
+  }
+
+  async function updateSubscriptionPlan(
+    key: string,
+    input: UpdateSubscriptionPlanInput,
+    tenantId?: string,
+  ): Promise<ISubscriptionPlan | null> {
+    return await runAsSystem(async () => {
+      const SubscriptionPlan = mongoose.models.SubscriptionPlan as Model<ISubscriptionPlan>;
+      return (await SubscriptionPlan.findOneAndUpdate(
+        { key, ...getTenantFilter(tenantId) },
+        { $set: input },
+        { new: true, runValidators: true },
+      ).lean()) as ISubscriptionPlan | null;
+    });
+  }
+
+  async function deleteSubscriptionPlan(
+    key: string,
+    tenantId?: string,
+  ): Promise<ISubscriptionPlan | null> {
+    return await runAsSystem(async () => {
+      const SubscriptionPlan = mongoose.models.SubscriptionPlan as Model<ISubscriptionPlan>;
+      return (await SubscriptionPlan.findOneAndDelete({
+        key,
+        ...getTenantFilter(tenantId),
+      }).lean()) as ISubscriptionPlan | null;
     });
   }
 
@@ -788,6 +857,11 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
 
   return {
     upsertSubscriptionPlan,
+    listSubscriptionPlans,
+    getSubscriptionPlan,
+    createSubscriptionPlan,
+    updateSubscriptionPlan,
+    deleteSubscriptionPlan,
     getEnabledSubscriptionPlans,
     findActiveUserSubscription,
     consumeSubscriptionQuota,
