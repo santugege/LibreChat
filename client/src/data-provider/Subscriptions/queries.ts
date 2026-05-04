@@ -18,6 +18,21 @@ export const useGetSubscriptionPlans = (
   );
 };
 
+export const useGetSubscriptionAdminPlans = (
+  config?: UseQueryOptions<t.TSubscriptionPlan[]>,
+): QueryObserverResult<t.TSubscriptionPlan[]> => {
+  return useQuery<t.TSubscriptionPlan[]>(
+    [QueryKeys.subscriptionAdminPlans],
+    () => dataService.getSubscriptionAdminPlans(),
+    {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+      ...config,
+    },
+  );
+};
+
 export const useGetSubscriptionStatus = (
   config?: UseQueryOptions<t.TSubscriptionStatus>,
 ): QueryObserverResult<t.TSubscriptionStatus> => {

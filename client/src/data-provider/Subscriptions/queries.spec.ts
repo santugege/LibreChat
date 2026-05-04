@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { QueryKeys, dataService } from 'librechat-data-provider';
 import {
+  useGetSubscriptionAdminPlans,
   useGetSubscriptionOrder,
   useGetSubscriptionPlans,
   useGetSubscriptionStatus,
@@ -15,11 +16,13 @@ jest.mock('librechat-data-provider', () => ({
     subscriptionPlans: 'subscriptionPlans',
     subscriptionStatus: 'subscriptionStatus',
     subscriptionOrder: 'subscriptionOrder',
+    subscriptionAdminPlans: 'subscriptionAdminPlans',
   },
   dataService: {
     getSubscriptionPlans: jest.fn(),
     getSubscriptionStatus: jest.fn(),
     getSubscriptionOrder: jest.fn(),
+    getSubscriptionAdminPlans: jest.fn(),
   },
 }));
 
@@ -46,6 +49,20 @@ describe('subscription queries', () => {
     const queryFn = mockUseQuery.mock.calls[0][1];
     queryFn();
     expect(dataService.getSubscriptionPlans).toHaveBeenCalled();
+  });
+
+  it('queries all subscription plans for admins', () => {
+    useGetSubscriptionAdminPlans({ enabled: true });
+
+    expect(mockUseQuery).toHaveBeenCalledWith(
+      [QueryKeys.subscriptionAdminPlans],
+      expect.any(Function),
+      expect.objectContaining({ enabled: true }),
+    );
+
+    const queryFn = mockUseQuery.mock.calls[0][1];
+    queryFn();
+    expect(dataService.getSubscriptionAdminPlans).toHaveBeenCalled();
   });
 
   it('queries current subscription status', () => {
