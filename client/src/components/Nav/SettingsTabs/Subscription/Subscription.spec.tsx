@@ -1,7 +1,12 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { SystemRoles } from 'librechat-data-provider';
-import type { TSubscriptionPlan, TSubscriptionStatus } from 'librechat-data-provider';
+import type {
+  TCreateSubscriptionOrderRequest,
+  TCreateSubscriptionOrderResponse,
+  TSubscriptionPlan,
+  TSubscriptionStatus,
+} from 'librechat-data-provider';
 import Subscription from './Subscription';
 
 const mockUseAuthContext = jest.fn();
@@ -103,6 +108,7 @@ describe('Subscription settings tab', () => {
   });
 
   afterEach(() => {
+    jest.restoreAllMocks();
     jest.resetAllMocks();
   });
 
@@ -120,8 +126,100 @@ describe('Subscription settings tab', () => {
     render(<Subscription />);
 
     expect(screen.getByRole('button', { name: 'com_nav_subscription_alipay' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'com_nav_subscription_wxpay' })).toBeDisabled();
+    expect(
+      screen.queryByRole('button', { name: 'com_nav_subscription_wxpay' }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText('com_nav_subscription_payment_unconfigured')).toBeInTheDocument();
+  });
+
+  it('shows the Alipay QR code when ZPAY returns QR payment instructions', () => {
+    const paymentWindow = {
+      location: { href: '' },
+      opener: window,
+      close: jest.fn(),
+    } as unknown as Window;
+    const openSpy = jest.spyOn(window, 'open').mockReturnValue(paymentWindow);
+    const mutate = jest.fn(
+      (
+        _: TCreateSubscriptionOrderRequest,
+        options: { onSuccess: (order: TCreateSubscriptionOrderResponse) => void },
+      ) => {
+        options.onSuccess({
+          orderId: 'order-1',
+          outTradeNo: 'trade-1',
+          status: 'pending',
+          payUrl: 'https://zpay.example/pay',
+          qrCode: 'https://qr.alipay.com/test-payment',
+          expiresAt: '2026-05-05T00:00:00.000Z',
+        });
+      },
+    );
+    mockUseGetStartupConfig.mockReturnValue({
+      data: { subscriptions: { enabled: true, paymentConfigured: true } },
+    });
+    mockUseCreateSubscriptionOrder.mockReturnValue({ mutate, isLoading: false });
+
+    render(<Subscription />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_nav_subscription_alipay' }));
+
+    expect(openSpy).toHaveBeenCalledWith('', '_blank');
+    expect(paymentWindow.opener).toBeNull();
+    expect(paymentWindow.close).toHaveBeenCalledTimes(1);
+    expect(mutate).toHaveBeenCalledWith(
+      { planKey: 'pro_monthly', paymentType: 'alipay' },
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
+    expect(paymentWindow.location.href).toBe('');
+    const dialog = screen.getByRole('dialog', {
+      name: 'com_nav_subscription_payment_qr_title',
+    });
+    expect(
+      within(dialog).getByRole('img', { name: 'com_nav_subscription_payment_qr_title' }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole('link', { name: 'com_nav_subscription_open_payment' }),
+    ).toHaveAttribute('href', 'https://qr.alipay.com/test-payment');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'com_ui_close' }));
+
+    expect(
+      screen.queryByRole('dialog', { name: 'com_nav_subscription_payment_qr_title' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('opens the ZPAY payment page when no QR code is returned', () => {
+    const paymentWindow = {
+      location: { href: '' },
+      opener: window,
+      close: jest.fn(),
+    } as unknown as Window;
+    const openSpy = jest.spyOn(window, 'open').mockReturnValue(paymentWindow);
+    const mutate = jest.fn(
+      (
+        _: TCreateSubscriptionOrderRequest,
+        options: { onSuccess: (order: TCreateSubscriptionOrderResponse) => void },
+      ) => {
+        options.onSuccess({
+          orderId: 'order-1',
+          outTradeNo: 'trade-1',
+          status: 'pending',
+          payUrl: 'https://zpay.example/pay',
+          expiresAt: '2026-05-05T00:00:00.000Z',
+        });
+      },
+    );
+    mockUseGetStartupConfig.mockReturnValue({
+      data: { subscriptions: { enabled: true, paymentConfigured: true } },
+    });
+    mockUseCreateSubscriptionOrder.mockReturnValue({ mutate, isLoading: false });
+
+    render(<Subscription />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_nav_subscription_alipay' }));
+
+    expect(openSpy).toHaveBeenCalledWith('', '_blank');
+    expect(paymentWindow.location.href).toBe('https://zpay.example/pay');
   });
 
   it('shows plan management for admins', () => {

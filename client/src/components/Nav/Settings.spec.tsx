@@ -1,4 +1,5 @@
 import React from 'react';
+import { SettingsTabValues } from 'librechat-data-provider';
 import { cleanup, render, screen } from '@testing-library/react';
 import Settings from './Settings';
 
@@ -89,6 +90,18 @@ describe('Settings', () => {
     render(<Settings open={true} onOpenChange={jest.fn()} />);
 
     expect(screen.getByRole('tab', { name: 'com_nav_setting_subscription' })).toBeInTheDocument();
+  });
+
+  it('opens on the requested initial settings tab', () => {
+    render(
+      <Settings open={true} onOpenChange={jest.fn()} initialTab={SettingsTabValues.SUBSCRIPTION} />,
+    );
+
+    expect(screen.getByTestId('subscription-tab')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'com_nav_setting_subscription' })).toHaveAttribute(
+      'data-state',
+      'active',
+    );
   });
 
   it('hides the subscription settings tab when subscriptions are disabled', () => {

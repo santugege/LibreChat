@@ -11,8 +11,8 @@ const connect = require('./connect');
 const plans = [
   {
     key: 'free',
-    name: 'Free',
-    description: 'Default free quota',
+    name: '免费版',
+    description: '默认免费额度',
     price: 0,
     durationDays: 30,
     textDailyLimit: 20,
@@ -22,8 +22,8 @@ const plans = [
   },
   {
     key: 'pro_monthly',
-    name: 'Pro Monthly',
-    description: 'Monthly subscription for regular usage',
+    name: '专业月度版',
+    description: '适合日常使用的月度订阅',
     price: 29.9,
     durationDays: 30,
     textDailyLimit: 300,

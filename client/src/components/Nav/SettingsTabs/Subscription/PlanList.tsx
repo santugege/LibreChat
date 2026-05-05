@@ -14,7 +14,6 @@ type PlanListProps = {
 
 const paymentOptions: { type: PaymentType; label: TranslationKeys }[] = [
   { type: 'alipay', label: 'com_nav_subscription_alipay' },
-  { type: 'wxpay', label: 'com_nav_subscription_wxpay' },
 ];
 
 function PlanList({ plans, paymentConfigured, isCreatingOrder, onCreateOrder }: PlanListProps) {

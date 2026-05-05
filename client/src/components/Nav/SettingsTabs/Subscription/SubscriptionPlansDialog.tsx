@@ -1,23 +1,19 @@
 import React, { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { SystemRoles } from 'librechat-data-provider';
 import type {
-  TCreateSubscriptionOrderRequest,
-  TSubscriptionOrder,
   TSubscriptionPlan,
+  TSubscriptionOrder,
+  TCreateSubscriptionOrderRequest,
 } from 'librechat-data-provider';
 import {
-  useCreateSubscriptionOrder,
   useGetStartupConfig,
   useGetSubscriptionOrder,
   useGetSubscriptionPlans,
-  useGetSubscriptionStatus,
+  useCreateSubscriptionOrder,
 } from '~/data-provider';
 import { useAuthContext, useLocalize } from '~/hooks';
-import AdminPlanManager from './AdminPlanManager';
 import PlanList from './PlanList';
-import UsageMeter from './UsageMeter';
 
 type PaymentType = TCreateSubscriptionOrderRequest['paymentType'];
 type PaymentInstructions = {
@@ -25,23 +21,26 @@ type PaymentInstructions = {
   qrCode?: string;
 };
 
+type SubscriptionPlansDialogProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+};
+
 function isCompletedOrder(order: TSubscriptionOrder | undefined): boolean {
   return order?.status === 'completed';
 }
 
-function Subscription() {
+function SubscriptionPlansDialog({ open, onOpenChange }: SubscriptionPlansDialogProps) {
   const localize = useLocalize();
-  const { isAuthenticated, user } = useAuthContext();
+  const { isAuthenticated } = useAuthContext();
   const { data: startupConfig } = useGetStartupConfig();
   const paymentConfigured = startupConfig?.subscriptions?.paymentConfigured === true;
   const enabled = isAuthenticated === true && startupConfig?.subscriptions?.enabled === true;
-  const isAdmin = user?.role === SystemRoles.ADMIN;
   const [orderId, setOrderId] = useState('');
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [paymentInstructions, setPaymentInstructions] = useState<PaymentInstructions | null>(null);
 
   const plansQuery = useGetSubscriptionPlans({ enabled });
-  const statusQuery = useGetSubscriptionStatus({ enabled });
   const createOrder = useCreateSubscriptionOrder();
   const orderQuery = useGetSubscriptionOrder(orderId, {
     enabled: orderId.length > 0,
@@ -49,8 +48,6 @@ function Subscription() {
   });
 
   const plans = useMemo<TSubscriptionPlan[]>(() => plansQuery.data ?? [], [plansQuery.data]);
-  const currentPlan = statusQuery.data?.plan;
-  const usage = statusQuery.data?.usage;
   const order = orderQuery.data;
   const paymentQrCode = order?.qrCode ?? paymentInstructions?.qrCode ?? '';
   const paymentHref =
@@ -101,67 +98,63 @@ function Subscription() {
     );
   };
 
-  if (!enabled) {
-    return (
-      <div className="p-1 text-sm text-text-secondary">
-        {localize('com_nav_subscription_disabled')}
-      </div>
-    );
+  if (!open) {
+    return null;
   }
 
   return (
-    <div className="flex flex-col gap-4 p-1 text-sm text-text-primary">
-      <section className="space-y-3">
-        <div>
-          <h3 className="text-sm font-semibold">{localize('com_nav_subscription_current_plan')}</h3>
-          <p className="mt-1 text-sm text-text-secondary">
-            {currentPlan?.name ?? localize('com_nav_subscription_loading')}
-          </p>
-        </div>
-
-        {usage && (
-          <div className="space-y-3 rounded-lg border border-border-light p-3">
-            <UsageMeter
-              label="com_nav_subscription_text_quota"
-              used={usage.text.used}
-              limit={usage.text.limit}
-            />
-            <UsageMeter
-              label="com_nav_subscription_image_quota"
-              used={usage.image.used}
-              limit={usage.image.limit}
-            />
-            <p className="text-xs text-text-secondary">
-              {localize('com_nav_subscription_resets_at', {
-                resetAt: new Date(usage.resetAt).toLocaleString(),
-              })}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="subscription-plans-dialog-title"
+        className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-lg border border-border-light bg-surface-primary shadow-xl"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-border-light p-4">
+          <div className="space-y-1">
+            <h2 id="subscription-plans-dialog-title" className="text-base font-semibold">
+              {localize('com_subscription_plans_dialog_title')}
+            </h2>
+            <p className="text-sm text-text-secondary">
+              {localize('com_subscription_plans_dialog_description')}
             </p>
           </div>
-        )}
-      </section>
-
-      {!paymentConfigured && (
-        <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-text-primary">
-          {localize('com_nav_subscription_payment_unconfigured')}
+          <button
+            type="button"
+            aria-label={localize('com_ui_close')}
+            className="rounded-md p-1 text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+            onClick={() => onOpenChange(false)}
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
         </div>
-      )}
 
-      <section className="space-y-3">
-        <h3 className="text-sm font-semibold">
-          {localize('com_nav_subscription_available_plans')}
-        </h3>
-        <PlanList
-          plans={plans}
-          paymentConfigured={paymentConfigured}
-          isCreatingOrder={createOrder.isLoading}
-          onCreateOrder={handleCreateOrder}
-        />
-      </section>
+        <div className="flex flex-col gap-4 overflow-y-auto p-4 text-sm text-text-primary">
+          {!enabled && (
+            <div className="rounded-lg border border-border-light p-3 text-sm text-text-secondary">
+              {localize('com_nav_subscription_disabled')}
+            </div>
+          )}
 
-      {isAdmin && <AdminPlanManager />}
+          {enabled && !paymentConfigured && (
+            <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-text-primary">
+              {localize('com_nav_subscription_payment_unconfigured')}
+            </div>
+          )}
+
+          {enabled && (
+            <PlanList
+              plans={plans}
+              paymentConfigured={paymentConfigured}
+              isCreatingOrder={createOrder.isLoading}
+              onCreateOrder={handleCreateOrder}
+            />
+          )}
+        </div>
+      </div>
 
       {showPaymentDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
           <div
             role="dialog"
             aria-modal="true"
@@ -221,4 +214,4 @@ function Subscription() {
   );
 }
 
-export default React.memo(Subscription);
+export default React.memo(SubscriptionPlansDialog);
