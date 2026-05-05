@@ -1,5 +1,5 @@
 const express = require('express');
-const { isEnabled, getBalanceConfig } = require('@librechat/api');
+const { isEnabled, getBalanceConfig, getSubscriptionConfig } = require('@librechat/api');
 const { defaultSocialLogins } = require('librechat-data-provider');
 const { logger, getTenantId, SystemCapabilities } = require('@librechat/data-schemas');
 const { hasCapability } = require('~/server/middleware/roles/capabilities');
@@ -19,6 +19,13 @@ const publicSharedLinksEnabled =
 
 const sharePointFilePickerEnabled = isEnabled(process.env.ENABLE_SHAREPOINT_FILEPICKER);
 const openidReuseTokens = isEnabled(process.env.OPENID_REUSE_TOKENS);
+const requiredZPayEnvVars = [
+  'ZPAY_API_BASE',
+  'ZPAY_PID',
+  'ZPAY_PKEY',
+  'ZPAY_NOTIFY_URL',
+  'ZPAY_RETURN_URL',
+];
 
 function isBirthday() {
   const today = new Date();
@@ -116,6 +123,14 @@ function buildWebSearchConfig(appConfig) {
   };
 }
 
+function hasConfiguredEnvVar(name) {
+  return typeof process.env[name] === 'string' && process.env[name].trim().length > 0;
+}
+
+function isSubscriptionPaymentConfigured() {
+  return requiredZPayEnvVars.every(hasConfiguredEnvVar);
+}
+
 router.get('/', async function (req, res) {
   try {
     const sharedPayload = buildSharedPayload();
@@ -152,6 +167,7 @@ router.get('/', async function (req, res) {
     });
 
     const balanceConfig = getBalanceConfig(appConfig);
+    const subscriptionConfig = getSubscriptionConfig();
 
     /** @type {TStartupConfig} */
     const payload = {
@@ -161,6 +177,10 @@ router.get('/', async function (req, res) {
       turnstile: appConfig?.turnstileConfig,
       modelSpecs: appConfig?.modelSpecs,
       balance: balanceConfig,
+      subscriptions: {
+        enabled: subscriptionConfig.enabled,
+        paymentConfigured: isSubscriptionPaymentConfigured(),
+      },
       bundlerURL: process.env.SANDPACK_BUNDLER_URL,
       staticBundlerURL: process.env.SANDPACK_STATIC_BUNDLER_URL,
       sharePointFilePickerEnabled,
