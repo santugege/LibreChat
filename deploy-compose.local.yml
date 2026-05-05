@@ -1,9 +1,22 @@
 services:
   api:
     image: librechat-api:feat-ai-sky-new
+    depends_on: !override
+      - mongodb
+    environment: !override
+      - HOST=0.0.0.0
+      - NODE_ENV=production
+      - MONGO_URI=mongodb://mongodb:27017/LibreChat
+      - MEILI_HOST=http://meilisearch:7700
     build:
       context: .
       dockerfile: Dockerfile.multi
       target: api-build
       args:
         NODE_MAX_OLD_SPACE_SIZE: 6144
+  vectordb:
+    profiles:
+      - rag
+  rag_api:
+    profiles:
+      - rag
