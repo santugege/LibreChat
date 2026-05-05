@@ -2,6 +2,7 @@ import i18n from './i18n';
 import English from './en/translation.json';
 import French from './fr/translation.json';
 import Spanish from './es/translation.json';
+import Chinese from './zh-Hans/translation.json';
 import { TranslationKeys } from '~/hooks';
 
 describe('i18next translation tests', () => {
@@ -27,10 +28,9 @@ describe('i18next translation tests', () => {
     expect(i18n.t('com_ui_examples')).toBe(Spanish.com_ui_examples);
   });
 
-  it('should fallback to English for an invalid language code', () => {
-    // When an invalid language is provided, i18next should fallback to English
+  it('should fallback to Simplified Chinese for an invalid language code', () => {
     i18n.changeLanguage('invalid-code');
-    expect(i18n.t('com_ui_examples')).toBe(English.com_ui_examples);
+    expect(i18n.t('com_ui_examples')).toBe(Chinese.com_ui_examples);
   });
 
   it('should return the key itself for an invalid key', () => {

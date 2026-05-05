@@ -99,13 +99,19 @@ i18n
       'zh-TW': ['zh-Hant', 'en'],
       'zh-HK': ['zh-Hant', 'en'],
       zh: ['zh-Hans', 'en'],
-      default: ['en'],
+      default: ['zh-Hans'],
     },
     fallbackNS: 'translation',
     ns: ['translation'],
     debug: false,
     defaultNS,
     resources,
+    detection: {
+      order: ['cookie', 'localStorage'],
+      lookupCookie: 'lang',
+      lookupLocalStorage: 'lang',
+      caches: ['cookie', 'localStorage'],
+    },
     interpolation: { escapeValue: false },
   });
 

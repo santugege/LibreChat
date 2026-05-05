@@ -57,6 +57,9 @@ const createTestRouter = (initialEntry: string, isAuthenticated: boolean) =>
     { initialEntries: [initialEntry] },
   );
 
+const renderTestRouter = (router: ReturnType<typeof createTestRouter>) =>
+  render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+
 describe('StartupLayout — redirect race condition', () => {
   beforeEach(() => {
     sessionStorage.clear();
@@ -71,7 +74,7 @@ describe('StartupLayout — redirect race condition', () => {
     window.history.replaceState({}, '', '/login');
 
     const router = createTestRouter('/login', true);
-    render(<RouterProvider router={router} />);
+    renderTestRouter(router);
 
     await waitFor(() => {
       expect(router.state.location.pathname).toBe('/c/new');
@@ -82,7 +85,7 @@ describe('StartupLayout — redirect race condition', () => {
     window.history.replaceState({}, '', '/login?redirect_to=%2Fc%2Fabc123');
 
     const router = createTestRouter('/login?redirect_to=%2Fc%2Fabc123', true);
-    render(<RouterProvider router={router} />);
+    renderTestRouter(router);
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -94,7 +97,7 @@ describe('StartupLayout — redirect race condition', () => {
     sessionStorage.setItem(SESSION_KEY, '/c/abc123');
 
     const router = createTestRouter('/login', true);
-    render(<RouterProvider router={router} />);
+    renderTestRouter(router);
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -105,10 +108,22 @@ describe('StartupLayout — redirect race condition', () => {
     window.history.replaceState({}, '', '/login');
 
     const router = createTestRouter('/login', false);
-    render(<RouterProvider router={router} />);
+    renderTestRouter(router);
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     expect(router.state.location.pathname).toBe('/login');
+  });
+
+  it('uses ai_sky as the document title fallback', async () => {
+    window.history.replaceState({}, '', '/login');
+    document.title = '';
+
+    const router = createTestRouter('/login', false);
+    renderTestRouter(router);
+
+    await waitFor(() => {
+      expect(document.title).toBe('ai_sky');
+    });
   });
 });

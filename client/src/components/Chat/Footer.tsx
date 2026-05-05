@@ -3,6 +3,7 @@ import TagManager from 'react-gtm-module';
 import ReactMarkdown from 'react-markdown';
 import { Constants } from 'librechat-data-provider';
 import { useGetStartupConfig } from '~/data-provider';
+import { APP_BRAND } from '~/constants/branding';
 import { useLocalize } from '~/hooks';
 
 function Footer({ className }: { className?: string }) {
@@ -27,10 +28,7 @@ function Footer({ className }: { className?: string }) {
   const mainContentParts = (
     typeof config?.customFooter === 'string'
       ? config.customFooter
-      : '[LibreChat ' +
-        Constants.VERSION +
-        '](https://librechat.ai) - ' +
-        localize('com_ui_latest_footer')
+      : '[' + APP_BRAND + ' ' + Constants.VERSION + '](/) - ' + localize('com_ui_latest_footer')
   ).split('|');
 
   useEffect(() => {
