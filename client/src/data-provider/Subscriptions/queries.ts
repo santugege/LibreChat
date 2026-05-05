@@ -33,6 +33,21 @@ export const useGetSubscriptionAdminPlans = (
   );
 };
 
+export const useGetSubscriptionQuotaExemptions = (
+  config?: UseQueryOptions<t.TSubscriptionQuotaExemption[]>,
+): QueryObserverResult<t.TSubscriptionQuotaExemption[]> => {
+  return useQuery<t.TSubscriptionQuotaExemption[]>(
+    [QueryKeys.subscriptionQuotaExemptions],
+    () => dataService.getSubscriptionQuotaExemptions(),
+    {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+      ...config,
+    },
+  );
+};
+
 export const useGetSubscriptionStatus = (
   config?: UseQueryOptions<t.TSubscriptionStatus>,
 ): QueryObserverResult<t.TSubscriptionStatus> => {

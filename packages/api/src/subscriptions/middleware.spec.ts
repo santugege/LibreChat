@@ -1,20 +1,15 @@
 import express from 'express';
 import type { Server } from 'http';
 
-import type {
-  ConsumeSubscriptionQuotaInput,
-  ConsumeSubscriptionQuotaResult,
-} from './quota';
+import type { ConsumeSubscriptionQuotaInput, ConsumeSubscriptionQuotaResult } from './quota';
 import type { SubscriptionPlanView } from './types';
 import { createTextQuotaMiddleware } from './middleware';
-import {
-  rememberTextQuotaIdempotency,
-  createTextQuotaIdempotencyMiddleware,
-} from './idempotency';
+import { rememberTextQuotaIdempotency, createTextQuotaIdempotencyMiddleware } from './idempotency';
 
 type TestUser = {
   id?: string | null;
   _id?: string | { toString(): string } | null;
+  email?: string | null;
   tenantId?: string | null;
 };
 
@@ -37,6 +32,7 @@ type TextQuotaDb = {
   consumeSubscriptionQuota: (
     input: ConsumeSubscriptionQuotaInput,
   ) => Promise<ConsumeSubscriptionQuotaResult>;
+  isSubscriptionQuotaExempt: (email: string, tenantId?: string) => Promise<boolean>;
 };
 
 const freePlan: SubscriptionPlanView = {
@@ -60,6 +56,7 @@ function createDb(overrides: Partial<TextQuotaDb> = {}): TextQuotaDb {
       limit: input.limit,
       resetAt: input.windowEnd,
     }),
+    isSubscriptionQuotaExempt: async () => false,
     ...overrides,
   };
 }
@@ -74,15 +71,22 @@ function createApp(db: TextQuotaDb, user?: TestUser): express.Express {
   app.post('/chat', createTextQuotaMiddleware(db), (_req, res) => {
     res.status(204).end();
   });
-  app.use((error: TestError, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    let body: object = error.body ?? { message: error.message };
-    try {
-      body = error.body ?? (JSON.parse(error.message) as object);
-    } catch {
-      body = error.body ?? { message: error.message };
-    }
-    res.status(error.statusCode ?? 500).json(body);
-  });
+  app.use(
+    (
+      error: TestError,
+      _req: express.Request,
+      res: express.Response,
+      _next: express.NextFunction,
+    ) => {
+      let body: object = error.body ?? { message: error.message };
+      try {
+        body = error.body ?? (JSON.parse(error.message) as object);
+      } catch {
+        body = error.body ?? { message: error.message };
+      }
+      res.status(error.statusCode ?? 500).json(body);
+    },
+  );
   return app;
 }
 
@@ -108,9 +112,16 @@ function createApiApp(
       res.status(204).end();
     },
   );
-  app.use((error: TestError, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    res.status(error.statusCode ?? 500).json(error.body ?? { message: error.message });
-  });
+  app.use(
+    (
+      error: TestError,
+      _req: express.Request,
+      res: express.Response,
+      _next: express.NextFunction,
+    ) => {
+      res.status(error.statusCode ?? 500).json(error.body ?? { message: error.message });
+    },
+  );
   return app;
 }
 
@@ -144,10 +155,7 @@ async function close(server: Server): Promise<void> {
   });
 }
 
-async function requestApp(
-  app: express.Express,
-  body: object = {},
-): Promise<Response> {
+async function requestApp(app: express.Express, body: object = {}): Promise<Response> {
   const { server, baseUrl } = await listen(app);
 
   try {
@@ -277,6 +285,45 @@ describe('createTextQuotaMiddleware', () => {
     });
     expect(quotaInputs[0]?.requestId).toEqual(expect.stringMatching(/^conversation-1:/));
     expect(quotaInputs[0]?.requestId).not.toBe('message-1');
+  });
+
+  test('skips quota consumption for quota-exempt authenticated email addresses', async () => {
+    const exemptionLookups: Array<[string, string | undefined]> = [];
+    let quotaCalls = 0;
+    const db = createDb({
+      isSubscriptionQuotaExempt: async (email, tenantId) => {
+        exemptionLookups.push([email, tenantId]);
+        return email === 'vip@example.com' && tenantId === 'tenant-a';
+      },
+      getEnabledSubscriptionPlans: async () => {
+        quotaCalls += 1;
+        return [freePlan];
+      },
+      findActiveUserSubscription: async () => {
+        quotaCalls += 1;
+        return null;
+      },
+      consumeSubscriptionQuota: async (input) => {
+        quotaCalls += 1;
+        return {
+          allowed: true,
+          used: input.amount,
+          limit: input.limit,
+          resetAt: input.windowEnd,
+        };
+      },
+    });
+    const app = createApp(db, {
+      id: 'user-1',
+      email: 'VIP@example.com',
+      tenantId: 'tenant-a',
+    });
+
+    const response = await requestApp(app, { messageId: 'message-1' });
+
+    expect(response.status).toBe(204);
+    expect(exemptionLookups).toEqual([['vip@example.com', 'tenant-a']]);
+    expect(quotaCalls).toBe(0);
   });
 
   test('counts repeated client messageIds as separate default chat requests', async () => {
@@ -805,9 +852,14 @@ describe('createTextQuotaMiddleware', () => {
         };
       },
     });
-    const app = createApiApp(db, 'openai', { id: 'user-1' }, {
-      requestIdPolicy: 'generated',
-    });
+    const app = createApiApp(
+      db,
+      'openai',
+      { id: 'user-1' },
+      {
+        requestIdPolicy: 'generated',
+      },
+    );
     const body = { messageId: 'client-controlled-id' };
 
     const firstResponse = await requestApp(app, body);

@@ -4,6 +4,7 @@ import { SystemRoles } from 'librechat-data-provider';
 import type {
   TCreateSubscriptionOrderRequest,
   TCreateSubscriptionOrderResponse,
+  TSubscriptionQuotaExemption,
   TSubscriptionPlan,
   TSubscriptionStatus,
 } from 'librechat-data-provider';
@@ -19,9 +20,14 @@ const mockUseGetSubscriptionAdminPlans = jest.fn();
 const mockUseCreateSubscriptionAdminPlan = jest.fn();
 const mockUseUpdateSubscriptionAdminPlan = jest.fn();
 const mockUseDeleteSubscriptionAdminPlan = jest.fn();
+const mockUseGetSubscriptionQuotaExemptions = jest.fn();
+const mockUseCreateSubscriptionQuotaExemption = jest.fn();
+const mockUseDeleteSubscriptionQuotaExemption = jest.fn();
 const mockCreateSubscriptionAdminPlan = jest.fn();
 const mockUpdateSubscriptionAdminPlan = jest.fn();
 const mockDeleteSubscriptionAdminPlan = jest.fn();
+const mockCreateSubscriptionQuotaExemption = jest.fn();
+const mockDeleteSubscriptionQuotaExemption = jest.fn();
 
 jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string, values?: Record<string, unknown>) =>
@@ -39,6 +45,9 @@ jest.mock('~/data-provider', () => ({
   useCreateSubscriptionAdminPlan: () => mockUseCreateSubscriptionAdminPlan(),
   useUpdateSubscriptionAdminPlan: () => mockUseUpdateSubscriptionAdminPlan(),
   useDeleteSubscriptionAdminPlan: () => mockUseDeleteSubscriptionAdminPlan(),
+  useGetSubscriptionQuotaExemptions: () => mockUseGetSubscriptionQuotaExemptions(),
+  useCreateSubscriptionQuotaExemption: () => mockUseCreateSubscriptionQuotaExemption(),
+  useDeleteSubscriptionQuotaExemption: () => mockUseDeleteSubscriptionQuotaExemption(),
 }));
 
 const plans: TSubscriptionPlan[] = [
@@ -76,6 +85,13 @@ const status: TSubscriptionStatus = {
   },
 };
 
+const quotaExemptions: TSubscriptionQuotaExemption[] = [
+  {
+    email: 'vip@example.com',
+    createdAt: '2026-05-05T00:00:00.000Z',
+  },
+];
+
 describe('Subscription settings tab', () => {
   beforeEach(() => {
     mockUseAuthContext.mockReturnValue({
@@ -102,6 +118,21 @@ describe('Subscription settings tab', () => {
     });
     mockUseDeleteSubscriptionAdminPlan.mockReturnValue({
       mutate: mockDeleteSubscriptionAdminPlan,
+      isLoading: false,
+      isError: false,
+    });
+    mockUseGetSubscriptionQuotaExemptions.mockReturnValue({
+      data: quotaExemptions,
+      isLoading: false,
+      isError: false,
+    });
+    mockUseCreateSubscriptionQuotaExemption.mockReturnValue({
+      mutate: mockCreateSubscriptionQuotaExemption,
+      isLoading: false,
+      isError: false,
+    });
+    mockUseDeleteSubscriptionQuotaExemption.mockReturnValue({
+      mutate: mockDeleteSubscriptionQuotaExemption,
       isLoading: false,
       isError: false,
     });
@@ -234,12 +265,45 @@ describe('Subscription settings tab', () => {
     expect(
       screen.getByRole('button', { name: 'com_nav_subscription_admin_new_plan' }),
     ).toBeInTheDocument();
+    expect(screen.getByText('com_nav_subscription_quota_exemptions')).toBeInTheDocument();
   });
 
   it('hides plan management from non-admin users', () => {
     render(<Subscription />);
 
     expect(screen.queryByText('com_nav_subscription_admin_plans')).not.toBeInTheDocument();
+    expect(screen.queryByText('com_nav_subscription_quota_exemptions')).not.toBeInTheDocument();
+  });
+
+  it('lets admins add and remove quota exemption emails', () => {
+    mockUseAuthContext.mockReturnValue({
+      isAuthenticated: true,
+      user: { role: SystemRoles.ADMIN },
+    });
+
+    render(<Subscription />);
+
+    expect(screen.getByText('vip@example.com')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('com_nav_subscription_quota_exemption_email'), {
+      target: { value: ' VIP@Example.COM ' },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'com_nav_subscription_quota_exemption_add' }),
+    );
+
+    expect(mockCreateSubscriptionQuotaExemption).toHaveBeenCalledWith(
+      { email: 'vip@example.com' },
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'com_nav_subscription_quota_exemption_delete:vip@example.com',
+      }),
+    );
+
+    expect(mockDeleteSubscriptionQuotaExemption).toHaveBeenCalledWith('vip@example.com');
   });
 
   it('creates an admin subscription plan from visible form fields', () => {

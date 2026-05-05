@@ -15,6 +15,7 @@ export enum QueryKeys {
   subscriptionStatus = 'subscriptionStatus',
   subscriptionOrder = 'subscriptionOrder',
   subscriptionAdminPlans = 'subscriptionAdminPlans',
+  subscriptionQuotaExemptions = 'subscriptionQuotaExemptions',
   endpoints = 'endpoints',
   presets = 'presets',
   searchResults = 'searchResults',

@@ -8,6 +8,15 @@ type UpdateSubscriptionAdminPlanVariables = {
   payload: t.TUpdateSubscriptionPlanRequest;
 };
 
+function invalidateSubscriptionQuotaExemptionQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+) {
+  queryClient.invalidateQueries({
+    queryKey: [QueryKeys.subscriptionQuotaExemptions],
+    refetchType: 'all',
+  });
+}
+
 function invalidateSubscriptionPlanQueries(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({
     queryKey: [QueryKeys.subscriptionAdminPlans],
@@ -40,6 +49,36 @@ export const useCreateSubscriptionOrder = (): UseMutationResult<
       },
     },
   );
+};
+
+export const useCreateSubscriptionQuotaExemption = (): UseMutationResult<
+  t.TSubscriptionQuotaExemption,
+  unknown,
+  t.TCreateSubscriptionQuotaExemptionRequest,
+  unknown
+> => {
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    (payload: t.TCreateSubscriptionQuotaExemptionRequest) =>
+      dataService.createSubscriptionQuotaExemption(payload),
+    {
+      onSuccess: () => invalidateSubscriptionQuotaExemptionQueries(queryClient),
+    },
+  );
+};
+
+export const useDeleteSubscriptionQuotaExemption = (): UseMutationResult<
+  t.TSubscriptionQuotaExemption,
+  unknown,
+  string,
+  unknown
+> => {
+  const queryClient = useQueryClient();
+
+  return useMutation((email: string) => dataService.deleteSubscriptionQuotaExemption(email), {
+    onSuccess: () => invalidateSubscriptionQuotaExemptionQueries(queryClient),
+  });
 };
 
 export const useCreateSubscriptionAdminPlan = (): UseMutationResult<

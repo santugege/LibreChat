@@ -13,6 +13,7 @@ type ObjectIdLike = {
 type QuotaRequestUser = {
   id?: string | null;
   _id?: string | ObjectIdLike | null;
+  email?: string | null;
   tenantId?: string | null;
 };
 
@@ -55,6 +56,7 @@ export type TextQuotaMiddlewareDb = {
   getEnabledSubscriptionPlans: QuotaServiceDeps['getPlans'];
   findActiveUserSubscription: QuotaServiceDeps['findActiveUserSubscription'];
   consumeSubscriptionQuota: QuotaServiceDeps['consumeSubscriptionQuota'];
+  isSubscriptionQuotaExempt: (email: string, tenantId?: string) => Promise<boolean>;
 };
 
 export type TextQuotaMiddlewareOptions = {
@@ -76,6 +78,16 @@ function readIdentifier(value?: string | ObjectIdLike | null): string | undefine
   }
 
   return readNonemptyString(value?.toString());
+}
+
+function normalizeEmail(value?: string | null): string | undefined {
+  const email = value?.trim().toLowerCase();
+
+  if (!email || !/\S+@\S+\.\S+/.test(email)) {
+    return undefined;
+  }
+
+  return email;
 }
 
 function getUserId(req: QuotaRequest): string | undefined {
@@ -193,6 +205,12 @@ export function createTextQuotaMiddleware(
       }
 
       const tenantId = getTenantId(quotaReq);
+      const email = normalizeEmail(quotaReq.user?.email);
+      if (email && (await db.isSubscriptionQuotaExempt(email, tenantId))) {
+        next();
+        return;
+      }
+
       const quota = createQuotaService(quotaDeps, config);
       const requestId =
         readNonemptyString(quotaReq.subscriptionQuotaRequestId) ??

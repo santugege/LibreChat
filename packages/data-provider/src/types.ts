@@ -421,6 +421,17 @@ export type TCreateSubscriptionPlanRequest = TSubscriptionPlan;
 
 export type TUpdateSubscriptionPlanRequest = Partial<Omit<TSubscriptionPlan, 'key'>>;
 
+export type TSubscriptionQuotaExemption = {
+  email: string;
+  tenantId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type TCreateSubscriptionQuotaExemptionRequest = {
+  email: string;
+};
+
 export type TSubscriptionUsage = {
   windowKey: string;
   resetAt: string;

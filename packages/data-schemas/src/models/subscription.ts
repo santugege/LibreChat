@@ -4,6 +4,7 @@ import {
   usageBucketSchema,
   paymentOrderSchema,
   userSubscriptionSchema,
+  quotaExemptionSchema,
 } from '~/schema/subscription';
 import { applyTenantIsolation } from '~/models/plugins/tenantIsolation';
 import type {
@@ -12,6 +13,7 @@ import type {
   ISubscriptionUsageEvent,
   ISubscriptionUsageBucket,
   ISubscriptionPaymentOrder,
+  ISubscriptionQuotaExemption,
 } from '~/types';
 
 export function createSubscriptionModels(mongoose: typeof import('mongoose')) {
@@ -20,6 +22,7 @@ export function createSubscriptionModels(mongoose: typeof import('mongoose')) {
   applyTenantIsolation(usageBucketSchema);
   applyTenantIsolation(usageEventSchema);
   applyTenantIsolation(paymentOrderSchema);
+  applyTenantIsolation(quotaExemptionSchema);
 
   return {
     SubscriptionPlan:
@@ -37,5 +40,11 @@ export function createSubscriptionModels(mongoose: typeof import('mongoose')) {
     SubscriptionPaymentOrder:
       mongoose.models.SubscriptionPaymentOrder ||
       mongoose.model<ISubscriptionPaymentOrder>('SubscriptionPaymentOrder', paymentOrderSchema),
+    SubscriptionQuotaExemption:
+      mongoose.models.SubscriptionQuotaExemption ||
+      mongoose.model<ISubscriptionQuotaExemption>(
+        'SubscriptionQuotaExemption',
+        quotaExemptionSchema,
+      ),
   };
 }

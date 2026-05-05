@@ -8,6 +8,7 @@ import type {
   ISubscriptionPaymentOrder,
   ISubscriptionUsageEvent,
   ISubscriptionUsageBucket,
+  ISubscriptionQuotaExemption,
 } from '~/types';
 import { runAsSystem } from '~/config/tenantContext';
 
@@ -43,6 +44,11 @@ export type CreateSubscriptionPlanInput = UpsertSubscriptionPlanInput;
 export type UpdateSubscriptionPlanInput = Partial<
   Omit<UpsertSubscriptionPlanInput, 'key' | 'tenantId'>
 >;
+
+export type CreateSubscriptionQuotaExemptionInput = {
+  email: string;
+  tenantId?: string;
+};
 
 export type ConsumeSubscriptionQuotaInput = {
   user: ObjectIdInput;
@@ -95,6 +101,24 @@ function getTenantFilter(tenantId?: string): { tenantId: string | null } {
   return { tenantId: tenantId ?? null };
 }
 
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function isValidEmail(email: string): boolean {
+  return /\S+@\S+\.\S+/.test(email);
+}
+
+function getValidEmail(email: string): string {
+  const normalized = normalizeEmail(email);
+
+  if (!isValidEmail(normalized)) {
+    throw new Error('Invalid subscription quota exemption email');
+  }
+
+  return normalized;
+}
+
 function isQuotaKind(kind: string): kind is SubscriptionQuotaKind {
   return kind === 'text' || kind === 'image';
 }
@@ -125,7 +149,9 @@ function validateConsumeSubscriptionQuotaInput(input: ConsumeSubscriptionQuotaIn
   }
 
   if (!isValidDate(input.windowStart) || !isValidDate(input.windowEnd)) {
-    throw new Error('Invalid subscription quota input: windowStart and windowEnd must be valid Dates');
+    throw new Error(
+      'Invalid subscription quota input: windowStart and windowEnd must be valid Dates',
+    );
   }
 
   if (input.windowEnd.getTime() <= input.windowStart.getTime()) {
@@ -179,10 +205,14 @@ function getRequestIdUpdate(
   field: RequestIdsField,
   requestId: string,
 ): Partial<Record<RequestIdsField, string>> {
-  return field === 'textRequestIds' ? { textRequestIds: requestId } : { imageRequestIds: requestId };
+  return field === 'textRequestIds'
+    ? { textRequestIds: requestId }
+    : { imageRequestIds: requestId };
 }
 
-function getFulfilledSourceOrderFilter(sourceOrderId: Types.ObjectId): FilterQuery<IUserSubscription> {
+function getFulfilledSourceOrderFilter(
+  sourceOrderId: Types.ObjectId,
+): FilterQuery<IUserSubscription> {
   return {
     $or: [{ sourceOrderId }, { sourceOrderIds: sourceOrderId }],
   };
@@ -266,7 +296,9 @@ function assertMatchingQuotaEvent(
   user: Types.ObjectId,
 ): void {
   if (!isMatchingQuotaEvent(event, input, user)) {
-    throw new Error('Subscription quota requestId collision: existing usage event dimensions differ');
+    throw new Error(
+      'Subscription quota requestId collision: existing usage event dimensions differ',
+    );
   }
 }
 
@@ -383,6 +415,74 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
     });
   }
 
+  async function listSubscriptionQuotaExemptions(
+    tenantId?: string,
+  ): Promise<ISubscriptionQuotaExemption[]> {
+    return await runAsSystem(async () => {
+      const Exemption = mongoose.models
+        .SubscriptionQuotaExemption as Model<ISubscriptionQuotaExemption>;
+      return (await Exemption.find(getTenantFilter(tenantId))
+        .sort({ email: 1 })
+        .lean()) as ISubscriptionQuotaExemption[];
+    });
+  }
+
+  async function createSubscriptionQuotaExemption(
+    input: CreateSubscriptionQuotaExemptionInput,
+  ): Promise<ISubscriptionQuotaExemption | null> {
+    return await runAsSystem(async () => {
+      const Exemption = mongoose.models
+        .SubscriptionQuotaExemption as Model<ISubscriptionQuotaExemption>;
+      const email = getValidEmail(input.email);
+      const query: FilterQuery<ISubscriptionQuotaExemption> = {
+        email,
+        ...getTenantFilter(input.tenantId),
+      };
+
+      return (await Exemption.findOneAndUpdate(
+        query,
+        { $set: query },
+        { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true },
+      ).lean()) as ISubscriptionQuotaExemption | null;
+    });
+  }
+
+  async function deleteSubscriptionQuotaExemption(
+    emailInput: string,
+    tenantId?: string,
+  ): Promise<ISubscriptionQuotaExemption | null> {
+    return await runAsSystem(async () => {
+      const Exemption = mongoose.models
+        .SubscriptionQuotaExemption as Model<ISubscriptionQuotaExemption>;
+      const email = getValidEmail(emailInput);
+      return (await Exemption.findOneAndDelete({
+        email,
+        ...getTenantFilter(tenantId),
+      }).lean()) as ISubscriptionQuotaExemption | null;
+    });
+  }
+
+  async function isSubscriptionQuotaExempt(
+    emailInput: string,
+    tenantId?: string,
+  ): Promise<boolean> {
+    return await runAsSystem(async () => {
+      const Exemption = mongoose.models
+        .SubscriptionQuotaExemption as Model<ISubscriptionQuotaExemption>;
+      const email = normalizeEmail(emailInput);
+
+      if (!isValidEmail(email)) {
+        return false;
+      }
+
+      const exemption = await Exemption.exists({
+        email,
+        ...getTenantFilter(tenantId),
+      });
+      return exemption !== null;
+    });
+  }
+
   async function findActiveUserSubscription(
     user: ObjectIdInput,
     now = new Date(),
@@ -439,7 +539,9 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
         };
       };
 
-      const existingEvent = (await Event.findOne(eventQuery).lean()) as ISubscriptionUsageEvent | null;
+      const existingEvent = (await Event.findOne(
+        eventQuery,
+      ).lean()) as ISubscriptionUsageEvent | null;
       if (existingEvent) {
         return await resultFromEvent(existingEvent);
       }
@@ -495,7 +597,9 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
         };
         const hasCommittedMatchingEvent = async (): Promise<boolean> => {
           try {
-            const existing = (await Event.findOne(eventQuery).lean()) as ISubscriptionUsageEvent | null;
+            const existing = (await Event.findOne(
+              eventQuery,
+            ).lean()) as ISubscriptionUsageEvent | null;
             return Boolean(
               existing &&
                 existing.status === 'committed' &&
@@ -877,6 +981,10 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
     createSubscriptionPlan,
     updateSubscriptionPlan,
     deleteSubscriptionPlan,
+    listSubscriptionQuotaExemptions,
+    createSubscriptionQuotaExemption,
+    deleteSubscriptionQuotaExemption,
+    isSubscriptionQuotaExempt,
     getEnabledSubscriptionPlans,
     findActiveUserSubscription,
     consumeSubscriptionQuota,

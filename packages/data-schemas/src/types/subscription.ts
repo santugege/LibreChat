@@ -97,3 +97,10 @@ export interface ISubscriptionPaymentOrder extends Document {
   createdAt?: Date;
   updatedAt?: Date;
 }
+
+export interface ISubscriptionQuotaExemption extends Document {
+  email: string;
+  tenantId?: string | null;
+  createdAt?: Date;
+  updatedAt?: Date;
+}

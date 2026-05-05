@@ -105,6 +105,14 @@ type SubscriptionPaymentOrderLockResult = {
   fulfillingAt: Date;
 };
 
+type SubscriptionQuotaExemptionResult = {
+  _id: mongoose.Types.ObjectId;
+  email: string;
+  tenantId?: string | null;
+  createdAt?: Date;
+  updatedAt?: Date;
+};
+
 type CreateOrExtendUserSubscriptionInput = {
   user: string;
   planKey: string;
@@ -149,10 +157,7 @@ type SubscriptionUsageEventResult = {
 type SubscriptionTestMethods = {
   upsertSubscriptionPlan: (input: SubscriptionPlanInput) => Promise<SubscriptionPlanResult | null>;
   listSubscriptionPlans: (tenantId?: string) => Promise<SubscriptionPlanResult[]>;
-  getSubscriptionPlan: (
-    key: string,
-    tenantId?: string,
-  ) => Promise<SubscriptionPlanResult | null>;
+  getSubscriptionPlan: (key: string, tenantId?: string) => Promise<SubscriptionPlanResult | null>;
   createSubscriptionPlan: (input: SubscriptionPlanInput) => Promise<SubscriptionPlanResult | null>;
   updateSubscriptionPlan: (
     key: string,
@@ -199,6 +204,18 @@ type SubscriptionTestMethods = {
   createOrExtendUserSubscription: (
     input: CreateOrExtendUserSubscriptionInput,
   ) => Promise<UserSubscriptionResult | null>;
+  listSubscriptionQuotaExemptions: (
+    tenantId?: string,
+  ) => Promise<SubscriptionQuotaExemptionResult[]>;
+  createSubscriptionQuotaExemption: (input: {
+    email: string;
+    tenantId?: string;
+  }) => Promise<SubscriptionQuotaExemptionResult | null>;
+  deleteSubscriptionQuotaExemption: (
+    email: string,
+    tenantId?: string,
+  ) => Promise<SubscriptionQuotaExemptionResult | null>;
+  isSubscriptionQuotaExempt: (email: string, tenantId?: string) => Promise<boolean>;
 };
 
 const subscriptionModelNames = [
@@ -207,6 +224,7 @@ const subscriptionModelNames = [
   'SubscriptionUsageBucket',
   'SubscriptionUsageEvent',
   'SubscriptionPaymentOrder',
+  'SubscriptionQuotaExemption',
 ] as const;
 
 describe('subscription methods', () => {
@@ -304,10 +322,11 @@ describe('subscription methods', () => {
 
     const allPlans = await methods.listSubscriptionPlans!();
     const free = await methods.getSubscriptionPlan!('free');
-    const updated = await methods.updateSubscriptionPlan!(
-      'free',
-      { enabled: true, textDailyLimit: 25, sortOrder: 5 },
-    );
+    const updated = await methods.updateSubscriptionPlan!('free', {
+      enabled: true,
+      textDailyLimit: 25,
+      sortOrder: 5,
+    });
     const deleted = await methods.deleteSubscriptionPlan!('pro');
     const afterDelete = await methods.listSubscriptionPlans!();
 
@@ -381,6 +400,35 @@ describe('subscription methods', () => {
     await expect(methods.getSubscriptionPlan!('free')).resolves.toMatchObject({
       name: 'Tenantless Free',
     });
+  });
+
+  test('manages quota exemption emails with normalized tenant-scoped lookups', async () => {
+    const tenantless = await methods.createSubscriptionQuotaExemption!({
+      email: ' VIP@Example.COM ',
+    });
+    const tenant = await methods.createSubscriptionQuotaExemption!({
+      email: 'vip@example.com',
+      tenantId: 'tenant-a',
+    });
+
+    const tenantlessList = await methods.listSubscriptionQuotaExemptions!();
+    const tenantList = await methods.listSubscriptionQuotaExemptions!('tenant-a');
+    const tenantlessMatch = await methods.isSubscriptionQuotaExempt!('vip@example.com');
+    const tenantMatch = await methods.isSubscriptionQuotaExempt!('VIP@example.com', 'tenant-a');
+    const tenantMiss = await methods.isSubscriptionQuotaExempt!('vip@example.com', 'tenant-b');
+    const deleted = await methods.deleteSubscriptionQuotaExemption!('VIP@example.com', 'tenant-a');
+
+    expect(tenantless).toMatchObject({ email: 'vip@example.com', tenantId: null });
+    expect(tenant).toMatchObject({ email: 'vip@example.com', tenantId: 'tenant-a' });
+    expect(tenantlessList.map((item) => item.email)).toEqual(['vip@example.com']);
+    expect(tenantList.map((item) => item.email)).toEqual(['vip@example.com']);
+    expect(tenantlessMatch).toBe(true);
+    expect(tenantMatch).toBe(true);
+    expect(tenantMiss).toBe(false);
+    expect(deleted).toMatchObject({ email: 'vip@example.com', tenantId: 'tenant-a' });
+    await expect(methods.isSubscriptionQuotaExempt!('vip@example.com', 'tenant-a')).resolves.toBe(
+      false,
+    );
   });
 
   test('consumes subscription quota until the limit is reached', async () => {
@@ -862,9 +910,9 @@ describe('subscription methods', () => {
     const subscriptions = await UserSubscription.find({ user, tenantId: 'tenant-a' }).lean();
 
     expect(subscriptions).toHaveLength(1);
-    expect(results.every((result) => result?._id.toString() === subscriptions[0]._id.toString())).toBe(
-      true,
-    );
+    expect(
+      results.every((result) => result?._id.toString() === subscriptions[0]._id.toString()),
+    ).toBe(true);
     expect(subscriptions[0].expiresAt.toISOString()).toBe('2026-09-29T00:00:00.000Z');
     expect(subscriptions[0].sourceOrderIds?.map((value) => value.toString()).sort()).toEqual(
       sourceOrderIds.map((value) => value.toString()).sort(),

@@ -57,8 +57,9 @@ export default function useUnifiedSidebarLinks() {
       id: 'conversations',
       Component: ConversationsSection,
     };
+    const visibleSideNavLinks = sideNavLinks.filter((link) => link.id !== 'parameters');
 
-    return [conversationLink, ...sideNavLinks];
+    return [conversationLink, ...visibleSideNavLinks];
   }, [sideNavLinks]);
 
   return links;

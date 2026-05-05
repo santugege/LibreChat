@@ -15,6 +15,7 @@ import {
   useGetSubscriptionStatus,
 } from '~/data-provider';
 import { useAuthContext, useLocalize } from '~/hooks';
+import AdminQuotaExemptionManager from './AdminQuotaExemptionManager';
 import AdminPlanManager from './AdminPlanManager';
 import PlanList from './PlanList';
 import UsageMeter from './UsageMeter';
@@ -158,7 +159,12 @@ function Subscription() {
         />
       </section>
 
-      {isAdmin && <AdminPlanManager />}
+      {isAdmin && (
+        <>
+          <AdminQuotaExemptionManager />
+          <AdminPlanManager />
+        </>
+      )}
 
       {showPaymentDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">

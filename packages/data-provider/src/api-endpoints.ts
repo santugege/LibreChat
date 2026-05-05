@@ -53,6 +53,9 @@ export const subscriptionOrder = (orderId: string) =>
 export const subscriptionAdminPlans = () => `${subscriptions()}/admin/plans`;
 export const subscriptionAdminPlan = (planKey: string) =>
   `${subscriptionAdminPlans()}/${encodeURIComponent(planKey)}`;
+export const subscriptionQuotaExemptions = () => `${subscriptions()}/admin/quota-exemptions`;
+export const subscriptionQuotaExemption = (email: string) =>
+  `${subscriptionQuotaExemptions()}/${encodeURIComponent(email)}`;
 
 export const userPlugins = () => `${BASE_URL}/api/user/plugins`;
 

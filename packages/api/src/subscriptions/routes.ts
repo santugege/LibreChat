@@ -41,6 +41,13 @@ type SubscriptionPaymentOrderView = {
   completedAt?: Date;
 };
 
+type SubscriptionQuotaExemptionView = {
+  email: string;
+  tenantId?: string | null;
+  createdAt?: Date | string;
+  updatedAt?: Date | string;
+};
+
 type SubscriptionRouteDb = {
   listSubscriptionPlans: (tenantId?: string) => Promise<SubscriptionPlanView[]>;
   createSubscriptionPlan: (
@@ -52,6 +59,16 @@ type SubscriptionRouteDb = {
     tenantId?: string,
   ) => Promise<SubscriptionPlanView | null>;
   deleteSubscriptionPlan: (key: string, tenantId?: string) => Promise<SubscriptionPlanView | null>;
+  listSubscriptionQuotaExemptions: (tenantId?: string) => Promise<SubscriptionQuotaExemptionView[]>;
+  createSubscriptionQuotaExemption: (input: {
+    email: string;
+    tenantId?: string;
+  }) => Promise<SubscriptionQuotaExemptionView | null>;
+  deleteSubscriptionQuotaExemption: (
+    email: string,
+    tenantId?: string,
+  ) => Promise<SubscriptionQuotaExemptionView | null>;
+  isSubscriptionQuotaExempt: (email: string, tenantId?: string) => Promise<boolean>;
   getEnabledSubscriptionPlans: (tenantId?: string) => Promise<SubscriptionPlanView[]>;
   findActiveUserSubscription: (
     user: string,
@@ -100,6 +117,7 @@ type StringRecord = {
 };
 
 const invalidSubscriptionPlanRequestMessage = 'Invalid subscription plan request';
+const invalidQuotaExemptionRequestMessage = 'Invalid subscription quota exemption request';
 const subscriptionPlanCreateKeys = [
   'key',
   'name',
@@ -112,6 +130,7 @@ const subscriptionPlanCreateKeys = [
   'sortOrder',
 ] as const;
 const subscriptionPlanPatchKeys = subscriptionPlanCreateKeys.filter((key) => key !== 'key');
+const quotaExemptionKeys = ['email'] as const;
 
 function isObjectRecord(value: unknown): value is { [key: string]: unknown } {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -182,9 +201,9 @@ function getOptionalDescription(record: {
   return description ? { description } : {};
 }
 
-function getPatchDescription(record: {
-  [key: string]: unknown;
-}): { description?: string | undefined } {
+function getPatchDescription(record: { [key: string]: unknown }): {
+  description?: string | undefined;
+} {
   const value = record.description;
 
   if (value === undefined || value === null) {
@@ -342,8 +361,42 @@ function throwInvalidSubscriptionPlanRequest(): never {
   throw new Error(invalidSubscriptionPlanRequestMessage);
 }
 
+function throwInvalidQuotaExemptionRequest(): never {
+  throw new Error(invalidQuotaExemptionRequestMessage);
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function getQuotaExemptionEmail(emailInput: unknown): string {
+  if (typeof emailInput !== 'string') {
+    throwInvalidQuotaExemptionRequest();
+  }
+
+  const email = normalizeEmail(emailInput);
+  if (!/\S+@\S+\.\S+/.test(email)) {
+    throwInvalidQuotaExemptionRequest();
+  }
+
+  return email;
+}
+
+function getQuotaExemptionBody(body: unknown): { email: string } {
+  if (!isObjectRecord(body)) {
+    throwInvalidQuotaExemptionRequest();
+  }
+
+  assertAllowedKeys(body, quotaExemptionKeys);
+  return { email: getQuotaExemptionEmail(body.email) };
+}
+
 function isInvalidSubscriptionPlanRequest(error: unknown): boolean {
   return error instanceof Error && error.message === invalidSubscriptionPlanRequestMessage;
+}
+
+function isInvalidQuotaExemptionRequest(error: unknown): boolean {
+  return error instanceof Error && error.message === invalidQuotaExemptionRequestMessage;
 }
 
 function handleSubscriptionPlanRouteError(
@@ -353,6 +406,19 @@ function handleSubscriptionPlanRouteError(
 ): void {
   if (isInvalidSubscriptionPlanRequest(error)) {
     res.status(400).json({ message: invalidSubscriptionPlanRequestMessage });
+    return;
+  }
+
+  next(error);
+}
+
+function handleQuotaExemptionRouteError(
+  error: unknown,
+  res: express.Response,
+  next: express.NextFunction,
+): void {
+  if (isInvalidQuotaExemptionRequest(error)) {
+    res.status(400).json({ message: invalidQuotaExemptionRequestMessage });
     return;
   }
 
@@ -431,6 +497,15 @@ function serializeOrder(order: SubscriptionPaymentOrderView) {
     planKey: order.planKey,
     amount: order.amount,
     ...(order.completedAt ? { completedAt: order.completedAt.toISOString() } : {}),
+  };
+}
+
+function serializeQuotaExemption(exemption: SubscriptionQuotaExemptionView) {
+  return {
+    email: exemption.email,
+    ...(exemption.tenantId ? { tenantId: exemption.tenantId } : {}),
+    ...(exemption.createdAt ? { createdAt: new Date(exemption.createdAt).toISOString() } : {}),
+    ...(exemption.updatedAt ? { updatedAt: new Date(exemption.updatedAt).toISOString() } : {}),
   };
 }
 
@@ -581,6 +656,63 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
         res.json(deleted);
       } catch (error) {
         next(error);
+      }
+    },
+  );
+
+  router.get(
+    '/admin/quota-exemptions',
+    deps.requireJwtAuth,
+    deps.requireAdminAccess,
+    async (req, res, next) => {
+      try {
+        const user = getAuthenticatedUser(req);
+        const exemptions = await deps.db.listSubscriptionQuotaExemptions(user.tenantId);
+        res.json(exemptions.map(serializeQuotaExemption));
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    '/admin/quota-exemptions',
+    deps.requireJwtAuth,
+    deps.requireAdminAccess,
+    async (req, res, next) => {
+      try {
+        const user = getAuthenticatedUser(req);
+        const created = await deps.db.createSubscriptionQuotaExemption({
+          ...getQuotaExemptionBody(req.body),
+          ...(user.tenantId ? { tenantId: user.tenantId } : {}),
+        });
+        res.status(201).json(created ? serializeQuotaExemption(created) : null);
+      } catch (error) {
+        handleQuotaExemptionRouteError(error, res, next);
+      }
+    },
+  );
+
+  router.delete(
+    '/admin/quota-exemptions/:email',
+    deps.requireJwtAuth,
+    deps.requireAdminAccess,
+    async (req, res, next) => {
+      try {
+        const user = getAuthenticatedUser(req);
+        const deleted = await deps.db.deleteSubscriptionQuotaExemption(
+          getQuotaExemptionEmail(req.params.email),
+          user.tenantId,
+        );
+
+        if (!deleted) {
+          res.status(404).json({ message: 'Subscription quota exemption not found' });
+          return;
+        }
+
+        res.json(serializeQuotaExemption(deleted));
+      } catch (error) {
+        handleQuotaExemptionRouteError(error, res, next);
       }
     },
   );

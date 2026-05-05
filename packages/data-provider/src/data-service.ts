@@ -156,6 +156,22 @@ export function deleteSubscriptionAdminPlan(planKey: string): Promise<t.TSubscri
   return request.delete(endpoints.subscriptionAdminPlan(planKey));
 }
 
+export function getSubscriptionQuotaExemptions(): Promise<t.TSubscriptionQuotaExemption[]> {
+  return request.get(endpoints.subscriptionQuotaExemptions());
+}
+
+export function createSubscriptionQuotaExemption(
+  payload: t.TCreateSubscriptionQuotaExemptionRequest,
+): Promise<t.TSubscriptionQuotaExemption> {
+  return request.post(endpoints.subscriptionQuotaExemptions(), payload);
+}
+
+export function deleteSubscriptionQuotaExemption(
+  email: string,
+): Promise<t.TSubscriptionQuotaExemption> {
+  return request.delete(endpoints.subscriptionQuotaExemption(email));
+}
+
 export const updateTokenCount = (text: string) => {
   return request.post(endpoints.tokenizer(), { arg: text });
 };

@@ -106,6 +106,10 @@ function createDb(overrides: Partial<AdminSubscriptionRouteDb> = {}): AdminSubsc
     createSubscriptionPlan: async () => plan,
     updateSubscriptionPlan: async () => plan,
     deleteSubscriptionPlan: async () => plan,
+    listSubscriptionQuotaExemptions: async () => [],
+    createSubscriptionQuotaExemption: async (input) => ({ email: input.email }),
+    deleteSubscriptionQuotaExemption: async (email) => ({ email }),
+    isSubscriptionQuotaExempt: async () => false,
     ...overrides,
   };
 }
@@ -436,6 +440,88 @@ describe('createSubscriptionRouter', () => {
 
     expect(response.status).toBe(403);
     expect(await readJson<{ message: string }>(response)).toEqual({ message: 'admin required' });
+  });
+
+  test('admin routes manage quota exemption emails for the authenticated tenant', async () => {
+    const exemptions = [{ email: 'vip@example.com' }, { email: 'team@example.com' }];
+    const listTenantIds: Array<string | undefined> = [];
+    const created: Array<{ email: string; tenantId?: string }> = [];
+    const deleted: Array<{ email: string; tenantId?: string }> = [];
+    const app = createApp({
+      db: createDb({
+        listSubscriptionQuotaExemptions: async (tenantId?: string) => {
+          listTenantIds.push(tenantId);
+          return exemptions;
+        },
+        createSubscriptionQuotaExemption: async (input) => {
+          created.push(input);
+          return { email: input.email.trim().toLowerCase(), tenantId: input.tenantId };
+        },
+        deleteSubscriptionQuotaExemption: async (email, tenantId) => {
+          deleted.push({ email, tenantId });
+          return { email: email.trim().toLowerCase(), tenantId };
+        },
+      }),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'admin-1', tenantId: 'tenant-a' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService,
+    });
+
+    const listResponse = await requestApp(app, '/api/subscriptions/admin/quota-exemptions');
+    const createResponse = await requestApp(app, '/api/subscriptions/admin/quota-exemptions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: ' VIP@Example.COM ' }),
+    });
+    const deleteResponse = await requestApp(
+      app,
+      '/api/subscriptions/admin/quota-exemptions/VIP%40Example.COM',
+      { method: 'DELETE' },
+    );
+
+    expect(listResponse.status).toBe(200);
+    expect(await readJson<typeof exemptions>(listResponse)).toEqual(exemptions);
+    expect(listTenantIds).toEqual(['tenant-a']);
+
+    expect(createResponse.status).toBe(201);
+    expect(await readJson<{ email: string; tenantId?: string }>(createResponse)).toEqual({
+      email: 'vip@example.com',
+      tenantId: 'tenant-a',
+    });
+    expect(created).toEqual([{ email: 'vip@example.com', tenantId: 'tenant-a' }]);
+
+    expect(deleteResponse.status).toBe(200);
+    expect(await readJson<{ email: string; tenantId?: string }>(deleteResponse)).toEqual({
+      email: 'vip@example.com',
+      tenantId: 'tenant-a',
+    });
+    expect(deleted).toEqual([{ email: 'vip@example.com', tenantId: 'tenant-a' }]);
+  });
+
+  test('admin quota exemption create rejects invalid emails', async () => {
+    const app = createApp({
+      db: createDb(),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'admin-1', tenantId: 'tenant-a' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService,
+    });
+
+    const response = await requestApp(app, '/api/subscriptions/admin/quota-exemptions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'not-an-email' }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await readJson<{ message: string }>(response)).toEqual({
+      message: 'Invalid subscription quota exemption request',
+    });
   });
 
   test('admin plan create rejects invalid bodies with a bad request response', async () => {
