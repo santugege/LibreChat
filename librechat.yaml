@@ -37,6 +37,16 @@ endpoints:
         fetch: false
       titleConvo: true
       titleModel: 'gpt5.5'
+      titleMethod: 'completion'
+      titlePrompt: |-
+        请根据下面的对话内容生成一个简洁的简体中文标题。
+        标题必须以简体中文为主，不要生成英文句子；只输出标题本身，不要解释，不要加引号，不要包含标点，不超过 20 个汉字。
+
+        对话：
+        {convo}
+      titlePromptTemplate: |-
+        用户：{input}
+        助手：{output}
       summarize: false
       summaryModel: 'gpt5.5'
       modelDisplayLabel: 'NS2E'
