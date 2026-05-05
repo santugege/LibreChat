@@ -1,0 +1,9 @@
+services:
+  api:
+    image: librechat-api:feat-ai-sky-new
+    build:
+      context: .
+      dockerfile: Dockerfile.multi
+      target: api-build
+      args:
+        NODE_MAX_OLD_SPACE_SIZE: 6144
