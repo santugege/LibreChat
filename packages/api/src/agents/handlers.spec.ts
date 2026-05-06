@@ -45,6 +45,38 @@ function invokeHandler(
 }
 
 describe('createToolExecuteHandler', () => {
+  it('rejects subscription quota tool errors so the run surfaces the structured error', async () => {
+    const quotaMessage = JSON.stringify({
+      type: 'subscription_quota',
+      kind: 'image',
+      used: 5,
+      limit: 5,
+      planKey: 'free',
+      resetAt: '2026-05-05T16:00:00.000Z',
+    });
+    const loadTools: ToolExecuteOptions['loadTools'] = jest.fn(async () => ({
+      loadedTools: [
+        {
+          name: 'image_gen_oai',
+          invoke: jest.fn(async () => {
+            throw new Error(quotaMessage);
+          }),
+        },
+      ] as never[],
+    }));
+    const handler = createToolExecuteHandler({ loadTools });
+
+    await expect(
+      invokeHandler(handler, [
+        {
+          id: 'call_image_quota',
+          name: 'image_gen_oai',
+          args: { prompt: 'a tree' },
+        },
+      ]),
+    ).rejects.toThrow(quotaMessage);
+  });
+
   describe('code execution session context passthrough', () => {
     it('passes session_id and _injected_files from codeSessionContext to toolCallConfig', async () => {
       const capturedConfigs: Record<string, unknown>[] = [];

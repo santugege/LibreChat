@@ -31,6 +31,15 @@ export type ToolEndCallback = (
   metadata: ToolEndCallbackMetadata,
 ) => Promise<void>;
 
+type SubscriptionQuotaLimitCandidate = {
+  type?: unknown;
+  kind?: unknown;
+  used?: unknown;
+  limit?: unknown;
+  planKey?: unknown;
+  resetAt?: unknown;
+};
+
 export interface ToolExecuteOptions {
   /** Loads tools by name, using agentId to look up agent-specific context */
   loadTools: (
@@ -43,6 +52,34 @@ export interface ToolExecuteOptions {
   }>;
   /** Callback to process tool artifacts (code output files, file citations, etc.) */
   toolEndCallback?: ToolEndCallback;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isSubscriptionQuotaLimit(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+
+  const candidate = value as SubscriptionQuotaLimitCandidate;
+  return (
+    candidate.type === 'subscription_quota' &&
+    (candidate.kind === 'text' || candidate.kind === 'image') &&
+    isFiniteNumber(candidate.used) &&
+    isFiniteNumber(candidate.limit) &&
+    typeof candidate.planKey === 'string' &&
+    typeof candidate.resetAt === 'string'
+  );
+}
+
+function isSubscriptionQuotaErrorMessage(message: string): boolean {
+  try {
+    return isSubscriptionQuotaLimit(JSON.parse(message));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -153,7 +190,13 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     status: 'success' as const,
                   };
                 } catch (toolError) {
-                  const error = toolError as Error;
+                  const error =
+                    toolError instanceof Error ? toolError : new Error(String(toolError));
+                  if (isSubscriptionQuotaErrorMessage(error.message)) {
+                    logger.warn(`[ON_TOOL_EXECUTE] Tool ${tc.name} blocked by subscription quota`);
+                    throw error;
+                  }
+
                   logger.error(`[ON_TOOL_EXECUTE] Tool ${tc.name} error:`, error);
                   return {
                     toolCallId: tc.id,
@@ -167,13 +210,25 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
 
             resolve(results);
           } catch (error) {
-            logger.error('[ON_TOOL_EXECUTE] Fatal error:', error);
-            reject(error as Error);
+            const toolError = error instanceof Error ? error : new Error(String(error));
+            if (isSubscriptionQuotaErrorMessage(toolError.message)) {
+              reject(toolError);
+              return;
+            }
+
+            logger.error('[ON_TOOL_EXECUTE] Fatal error:', toolError);
+            reject(toolError);
           }
         });
       } catch (outerError) {
-        logger.error('[ON_TOOL_EXECUTE] Unexpected error:', outerError);
-        reject(outerError as Error);
+        const error = outerError instanceof Error ? outerError : new Error(String(outerError));
+        if (isSubscriptionQuotaErrorMessage(error.message)) {
+          reject(error);
+          return;
+        }
+
+        logger.error('[ON_TOOL_EXECUTE] Unexpected error:', error);
+        reject(error);
       }
     },
   };
