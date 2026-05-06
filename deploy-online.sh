@@ -34,7 +34,7 @@ docker compose "${COMPOSE_FILES[@]}" exec -T api sh -lc '
 '
 
 docker compose "${COMPOSE_FILES[@]}" exec -T api sh -lc 'cd /app && npm run seed-subscriptions'
-docker compose "${COMPOSE_FILES[@]}" exec -T api sh -lc 'cd /app && node <<'"'"'NODE'"'"'
+docker compose "${COMPOSE_FILES[@]}" exec -T api sh -lc 'cd /app && node' <<'NODE'
 const path = require('path');
 const mongoose = require('mongoose');
 const { createModels, runAsSystem } = require('@librechat/data-schemas');
@@ -85,7 +85,7 @@ const connect = require('./config/connect');
   await mongoose.disconnect();
   process.exit(1);
 });
-NODE'
+NODE
 
 docker compose "${COMPOSE_FILES[@]}" ps
 docker compose "${COMPOSE_FILES[@]}" logs --tail=100 api
