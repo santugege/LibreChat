@@ -1,6 +1,9 @@
 import { useState, useMemo, useCallback } from 'react';
 import copy from 'copy-to-clipboard';
+import type { SubscriptionQuotaNoticePayload } from '~/components/Messages/Content/SubscriptionQuotaNotice';
+import SubscriptionQuotaNotice from '~/components/Messages/Content/SubscriptionQuotaNotice';
 import CopyButton from '~/components/Messages/Content/CopyButton';
+import { extractJson, isJson } from '~/utils/json';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
 
@@ -8,6 +11,10 @@ interface ContentBlock {
   type?: string;
   text?: string;
 }
+
+type SubscriptionQuotaCandidate = Partial<SubscriptionQuotaNoticePayload> & {
+  type?: unknown;
+};
 
 const ERROR_PREFIX = /^Error:\s*(\[.*?\]\s*)*tool call failed:\s*/i;
 const ERROR_INNER = /^Error\s+\w+ing to endpoint\s*\(HTTP \d+\):\s*/i;
@@ -29,12 +36,50 @@ function isStructuredText(text: string): boolean {
   return text.includes('\n') || text.includes('{') || text.includes(':');
 }
 
+function toSubscriptionQuotaPayload(value: unknown): SubscriptionQuotaNoticePayload | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const candidate = value as SubscriptionQuotaCandidate;
+  if (
+    candidate.type !== 'subscription_quota' ||
+    typeof candidate.kind !== 'string' ||
+    typeof candidate.used !== 'number' ||
+    !Number.isFinite(candidate.used) ||
+    typeof candidate.limit !== 'number' ||
+    !Number.isFinite(candidate.limit) ||
+    typeof candidate.planKey !== 'string' ||
+    typeof candidate.resetAt !== 'string'
+  ) {
+    return undefined;
+  }
+
+  return {
+    kind: candidate.kind,
+    used: candidate.used,
+    limit: candidate.limit,
+    planKey: candidate.planKey,
+    resetAt: candidate.resetAt,
+  };
+}
+
+function parseSubscriptionQuota(text: string): SubscriptionQuotaNoticePayload | undefined {
+  const jsonString = extractJson(text);
+  if (!isJson(jsonString)) {
+    return undefined;
+  }
+
+  return toSubscriptionQuotaPayload(JSON.parse(jsonString));
+}
+
 interface ExtractedText {
   text: string;
   rawError: string;
   error: boolean;
   /** When true, `text` contains raw JSON that should be rendered as a highlighted code block. */
   isJson: boolean;
+  subscriptionQuota?: SubscriptionQuotaNoticePayload;
 }
 
 function extractText(raw: string): ExtractedText {
@@ -43,8 +88,25 @@ function extractText(raw: string): ExtractedText {
     return { text: '', rawError: '', error: false, isJson: false };
   }
 
+  const directSubscriptionQuota = parseSubscriptionQuota(trimmed);
+  if (directSubscriptionQuota) {
+    return {
+      text: '',
+      rawError: '',
+      error: false,
+      isJson: false,
+      subscriptionQuota: directSubscriptionQuota,
+    };
+  }
+
   if (isError(trimmed)) {
-    return { text: cleanError(trimmed), rawError: trimmed, error: true, isJson: false };
+    const cleaned = cleanError(trimmed);
+    const subscriptionQuota = parseSubscriptionQuota(cleaned) ?? parseSubscriptionQuota(trimmed);
+    if (subscriptionQuota) {
+      return { text: '', rawError: trimmed, error: true, isJson: false, subscriptionQuota };
+    }
+
+    return { text: cleaned, rawError: trimmed, error: true, isJson: false };
   }
 
   if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
@@ -60,8 +122,20 @@ function extractText(raw: string): ExtractedText {
             .map((b) => b.text)
             .join('\n')
             .trim();
+          const subscriptionQuota = parseSubscriptionQuota(joined);
+          if (subscriptionQuota) {
+            return { text: '', rawError: '', error: false, isJson: false, subscriptionQuota };
+          }
+
           if (isError(joined)) {
-            return { text: cleanError(joined), rawError: joined, error: true, isJson: false };
+            const cleaned = cleanError(joined);
+            const subscriptionQuota =
+              parseSubscriptionQuota(cleaned) ?? parseSubscriptionQuota(joined);
+            if (subscriptionQuota) {
+              return { text: '', rawError: joined, error: true, isJson: false, subscriptionQuota };
+            }
+
+            return { text: cleaned, rawError: joined, error: true, isJson: false };
           }
           return { text: joined, rawError: '', error: false, isJson: false };
         }
@@ -91,7 +165,13 @@ interface OutputRendererProps {
 
 export default function OutputRenderer({ text }: OutputRendererProps) {
   const localize = useLocalize();
-  const { text: displayText, rawError, error, isJson } = useMemo(() => extractText(text), [text]);
+  const {
+    text: displayText,
+    rawError,
+    error,
+    isJson,
+    subscriptionQuota,
+  } = useMemo(() => extractText(text), [text]);
   const [isExpanded, setIsExpanded] = useState(false);
   const [showErrorDetails, setShowErrorDetails] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
@@ -101,6 +181,10 @@ export default function OutputRenderer({ text }: OutputRendererProps) {
     copy(displayText, { format: 'text/plain' });
     setTimeout(() => setIsCopied(false), 3000);
   }, [displayText]);
+
+  if (subscriptionQuota) {
+    return <SubscriptionQuotaNotice quota={subscriptionQuota} localize={localize} />;
+  }
 
   if (!displayText) {
     return null;
