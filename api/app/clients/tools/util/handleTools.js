@@ -18,6 +18,7 @@ const {
   Tools,
   Constants,
   Permissions,
+  imageGenTools,
   EToolResources,
   PermissionTypes,
 } = require('librechat-data-provider');
@@ -46,6 +47,8 @@ const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { getMCPServerTools } = require('~/server/services/Config');
 const { getMCPServersRegistry } = require('~/config');
 const { getRoleByName } = require('~/models');
+
+const imageQuotaToolNames = new Set([...imageGenTools, 'image_gen_oai', 'image_edit_oai']);
 
 /**
  * Validates the availability and authentication of tools for a user based on environment variables or user-specific plugin authentication values.
@@ -136,6 +139,65 @@ const loadToolWithAuth = (userId, authFields, ToolConstructor, options = {}) => 
  */
 const getAuthFields = (toolKey) => {
   return manifestToolMap[toolKey]?.authConfig.map((auth) => auth.authField) ?? [];
+};
+
+const getImageQuotaAmount = (input) => {
+  if (!input || typeof input !== 'object') {
+    return 1;
+  }
+
+  const amount = Number(input.n ?? 1);
+  if (!Number.isFinite(amount)) {
+    return 1;
+  }
+
+  return Math.min(Math.max(1, Math.trunc(amount)), 10);
+};
+
+const getImageQuotaRequestId = (config) => {
+  const requestId = config?.toolCall?.id;
+  return typeof requestId === 'string' && requestId.length > 0 ? requestId : undefined;
+};
+
+const shouldConsumeImageQuota = (input) => {
+  if (!input || typeof input !== 'object') {
+    return false;
+  }
+
+  return typeof input.prompt === 'string' && input.prompt.length > 0;
+};
+
+const wrapImageQuotaTools = (loadedTools, imageQuotaGuard) => {
+  if (typeof imageQuotaGuard !== 'function') {
+    return loadedTools;
+  }
+
+  for (const loadedTool of loadedTools) {
+    if (
+      !loadedTool?.name ||
+      !imageQuotaToolNames.has(loadedTool.name) ||
+      typeof loadedTool._call !== 'function' ||
+      loadedTool.__imageQuotaWrapped === true
+    ) {
+      continue;
+    }
+
+    const originalCall = loadedTool._call.bind(loadedTool);
+    loadedTool._call = async (input, runManager, config) => {
+      if (shouldConsumeImageQuota(input)) {
+        await imageQuotaGuard({
+          toolName: loadedTool.name,
+          amount: getImageQuotaAmount(input),
+          requestId: getImageQuotaRequestId(config),
+        });
+      }
+
+      return originalCall(input, runManager, config);
+    };
+    loadedTool.__imageQuotaWrapped = true;
+  }
+
+  return loadedTools;
 };
 
 /**
@@ -493,6 +555,7 @@ const loadTools = async ({
     }
   }
   loadedTools.push(...(await Promise.all(mcpToolPromises)).flatMap((plugin) => plugin || []));
+  wrapImageQuotaTools(loadedTools, options.imageQuotaGuard);
   return { loadedTools, toolContextMap };
 };
 

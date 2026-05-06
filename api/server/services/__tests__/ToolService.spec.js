@@ -19,10 +19,12 @@ jest.mock('~/server/services/Config', () => ({
 
 const mockLoadToolDefinitions = jest.fn();
 const mockGetUserMCPAuthMap = jest.fn();
+const mockCreateImageQuotaGuard = jest.fn();
 jest.mock('@librechat/api', () => ({
   ...jest.requireActual('@librechat/api'),
   loadToolDefinitions: (...args) => mockLoadToolDefinitions(...args),
   getUserMCPAuthMap: (...args) => mockGetUserMCPAuthMap(...args),
+  createImageQuotaGuard: (...args) => mockCreateImageQuotaGuard(...args),
 }));
 
 const mockLoadToolsUtil = jest.fn();
@@ -360,6 +362,35 @@ describe('ToolService - Action Capability Gating', () => {
       });
 
       expect(mockLoadActionSets).not.toHaveBeenCalled();
+    });
+
+    it('passes an image quota guard when loading regular tools for execution', async () => {
+      const req = createMockReq([AgentCapabilities.tools]);
+      req.config = {};
+      const imageQuotaGuard = jest.fn();
+      mockCreateImageQuotaGuard.mockReturnValueOnce(imageQuotaGuard);
+
+      await loadToolsForExecution({
+        req,
+        res: {},
+        agent: { id: 'agent_123' },
+        toolNames: [regularTool],
+        actionsEnabled: false,
+      });
+
+      expect(mockCreateImageQuotaGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          findPluginAuthsByKeys: expect.any(Function),
+        }),
+        req,
+      );
+      expect(mockLoadToolsUtil).toHaveBeenCalledWith(
+        expect.objectContaining({
+          options: expect.objectContaining({
+            imageQuotaGuard,
+          }),
+        }),
+      );
     });
   });
 

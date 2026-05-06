@@ -3,7 +3,7 @@ import type { Server } from 'http';
 
 import type { ConsumeSubscriptionQuotaInput, ConsumeSubscriptionQuotaResult } from './quota';
 import type { SubscriptionPlanView } from './types';
-import { createTextQuotaMiddleware } from './middleware';
+import { createImageQuotaGuard, createTextQuotaMiddleware } from './middleware';
 import { rememberTextQuotaIdempotency, createTextQuotaIdempotencyMiddleware } from './idempotency';
 
 type TestUser = {
@@ -969,5 +969,55 @@ describe('createTextQuotaMiddleware', () => {
 
     expect(response.status).toBe(204);
     expect(users).toEqual(['mongo-user-1']);
+  });
+});
+
+describe('createImageQuotaGuard', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = {
+      ...originalEnv,
+      SUBSCRIPTIONS_ENABLED: 'true',
+      SUBSCRIPTION_QUOTA_TIMEZONE: 'Asia/Shanghai',
+    };
+    jest.useFakeTimers().setSystemTime(new Date('2026-05-01T18:30:00.000Z'));
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+    jest.useRealTimers();
+  });
+
+  test('consumes image quota for authenticated users with a tool-call request id', async () => {
+    const quotaInputs: ConsumeSubscriptionQuotaInput[] = [];
+    const db = createDb({
+      consumeSubscriptionQuota: async (input) => {
+        quotaInputs.push(input);
+        return {
+          allowed: true,
+          used: input.amount,
+          limit: input.limit,
+          resetAt: input.windowEnd,
+        };
+      },
+    });
+    const guard = createImageQuotaGuard(db, {
+      user: { id: 'user-1', email: 'Artist@Example.com', tenantId: 'tenant-a' },
+      body: { conversationId: 'conversation-1' },
+    } as express.Request);
+
+    await guard({ toolName: 'image_gen_oai', amount: 2, requestId: 'call-image-1' });
+
+    expect(quotaInputs).toHaveLength(1);
+    expect(quotaInputs[0]).toMatchObject({
+      user: 'user-1',
+      tenantId: 'tenant-a',
+      kind: 'image',
+      amount: 2,
+      limit: freePlan.imageDailyLimit,
+      requestId: 'image_gen_oai:call-image-1',
+      windowKey: '2026-05-02',
+    });
   });
 });

@@ -31,6 +31,12 @@ type QuotaRequest = Request<Record<string, string>, object, ChatQuotaBody | unde
 type TextQuotaErrorFormat = 'chat' | 'openai' | 'responses';
 type TextQuotaRequestIdPolicy = 'chat' | 'generated';
 
+type ImageQuotaGuardInput = {
+  toolName?: string | null;
+  amount?: number | null;
+  requestId?: string | null;
+};
+
 type SubscriptionQuotaChatErrorBody = SubscriptionQuotaError & {
   text: string;
 };
@@ -63,6 +69,14 @@ export type TextQuotaMiddlewareOptions = {
   errorFormat?: TextQuotaErrorFormat;
   requestIdPolicy?: TextQuotaRequestIdPolicy;
 };
+
+export type ImageQuotaGuardDb = TextQuotaMiddlewareDb;
+
+export type ImageQuotaGuardOptions = {
+  errorFormat?: TextQuotaErrorFormat;
+};
+
+export type ImageQuotaGuard = (input?: ImageQuotaGuardInput) => Promise<void>;
 
 function readNonemptyString(value?: string | null): string | undefined {
   if (typeof value !== 'string' || value.length === 0) {
@@ -121,6 +135,21 @@ function getRequestId(
   }
 
   return getGeneratedRequestId(body);
+}
+
+function getImageQuotaRequestId(req: QuotaRequest, input: ImageQuotaGuardInput = {}): string {
+  const toolName = readNonemptyString(input.toolName) ?? 'image';
+  const requestId = readNonemptyString(input.requestId);
+  if (requestId) {
+    return `${toolName}:${requestId}`;
+  }
+
+  const conversationId = readNonemptyString(req.body?.conversationId);
+  if (conversationId) {
+    return `${toolName}:${conversationId}:${randomUUID()}`;
+  }
+
+  return `${toolName}:${randomUUID()}`;
 }
 
 function createQuotaMessage(error: SubscriptionQuotaError): string {
@@ -232,6 +261,52 @@ export function createTextQuotaMiddleware(
       next();
     } catch (error) {
       next(error);
+    }
+  };
+}
+
+export function createImageQuotaGuard(
+  db: ImageQuotaGuardDb,
+  req: Request,
+  options: ImageQuotaGuardOptions = {},
+): ImageQuotaGuard {
+  const quotaDeps: QuotaServiceDeps = {
+    getPlans: db.getEnabledSubscriptionPlans,
+    findActiveUserSubscription: db.findActiveUserSubscription,
+    consumeSubscriptionQuota: db.consumeSubscriptionQuota,
+  };
+  const errorFormat = options.errorFormat ?? 'chat';
+
+  return async (input = {}) => {
+    const config = getSubscriptionConfig();
+    if (!config.enabled) {
+      return;
+    }
+
+    const quotaReq = req as QuotaRequest;
+    const userId = getUserId(quotaReq);
+    if (!userId) {
+      return;
+    }
+
+    const tenantId = getTenantId(quotaReq);
+    const email = normalizeEmail(quotaReq.user?.email);
+    if (email && (await db.isSubscriptionQuotaExempt(email, tenantId))) {
+      return;
+    }
+
+    const quota = createQuotaService(quotaDeps, config);
+    const result = await quota.consume({
+      userId,
+      kind: 'image',
+      amount: input.amount ?? 1,
+      requestId: getImageQuotaRequestId(quotaReq, input),
+      timezone: config.timezone,
+      ...(tenantId !== undefined ? { tenantId } : {}),
+    });
+
+    if (!result.allowed) {
+      throw createQuotaHttpError(result.error, errorFormat);
     }
   };
 }

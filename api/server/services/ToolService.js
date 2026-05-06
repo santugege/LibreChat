@@ -20,6 +20,7 @@ const {
   buildImageToolContext,
   buildToolClassification,
   buildOAuthToolCallName,
+  createImageQuotaGuard,
 } = require('@librechat/api');
 const {
   Time,
@@ -65,9 +66,11 @@ const { resolveConfigServers } = require('~/server/services/MCP');
 const { recordUsage } = require('~/server/services/Threads');
 const { loadTools } = require('~/app/clients/tools/util');
 const { redactMessage } = require('~/config/parsers');
-const { findPluginAuthsByKeys } = require('~/models');
+const db = require('~/models');
 const { getFlowStateManager } = require('~/config');
 const { getLogStores } = require('~/cache');
+
+const { findPluginAuthsByKeys } = db;
 
 const domainSeparatorRegex = new RegExp(actionDomainSeparator, 'g');
 
@@ -242,6 +245,7 @@ async function processRequiredActions(client, requiredActions) {
       uploadImageBuffer,
       openAIApiKey: client.apiKey,
       returnMetadata: true,
+      imageQuotaGuard: createImageQuotaGuard(db, client.req),
     },
     webSearch: appConfig.webSearch,
     fileStrategy: appConfig.fileStrategy,
@@ -464,7 +468,12 @@ async function processRequiredActions(client, requiredActions) {
 
     try {
       const promise = tool
-        ._call(currentAction.toolInput)
+        ._call(currentAction.toolInput, undefined, {
+          toolCall: {
+            id: currentAction.toolCallId,
+            name: currentAction.tool,
+          },
+        })
         .then(handleToolOutput)
         .catch(handleToolError);
       promises.push(promise);
@@ -975,6 +984,7 @@ async function loadAgentTools({
       processFileURL,
       uploadImageBuffer,
       returnMetadata: true,
+      imageQuotaGuard: createImageQuotaGuard(db, req),
       [Tools.web_search]: webSearchCallbacks,
     },
     webSearch: appConfig.webSearch,
@@ -1310,6 +1320,7 @@ async function loadToolsForExecution({
         processFileURL,
         uploadImageBuffer,
         returnMetadata: true,
+        imageQuotaGuard: createImageQuotaGuard(db, req),
         [Tools.web_search]: webSearchCallbacks,
       },
       webSearch: appConfig?.webSearch,

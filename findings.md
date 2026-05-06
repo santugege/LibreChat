@@ -45,3 +45,21 @@
 - Node `fetch` probe confirmed `GET https://ca.ns2e.com/v1/models` returns a model list including `gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.2-codex`, `gpt-5.3-codex`, and `gpt-5.4`; `gpt5.5` works even though it was not in the returned model list.
 - Updated default LibreChat models to prioritize `gpt5.5` and Codex-oriented GPT-5 models.
 - Updated `IMAGE_GEN_OAI_MODEL` to `image2`.
+
+## Image Quota Investigation
+
+- Codebase retrieval points to `packages/api/src/subscriptions/quota.ts` as the quota service and `packages/data-schemas/src/methods/subscription.ts` as the atomic quota consumption storage layer.
+- Text quota is enforced through `packages/api/src/subscriptions/middleware.ts`, which consumes quota with `kind: 'text'`.
+- Existing planning notes in `docs/superpowers/plans/2026-05-02-subscription-management.md` describe a proposed `createImageQuotaGuard` and image-tool wrapping, but the retrieved checklist lines are still marked incomplete.
+- Relevant image generation tool files include `api/app/clients/tools/structured/OpenAIImageTools.js` and `api/app/clients/tools/structured/GeminiImageGen.js`.
+- Runtime `@librechat/api` resolves to `packages/api/dist/index.js`, and that build currently exports `createImageQuotaGuard`.
+- `api/app/clients/tools/util/handleTools.js` does not mention `imageQuotaGuard` or `createImageQuotaGuard`.
+- Direct route `POST /api/agents/tools/:toolId/call` is not suitable for image generation probing because `api/server/controllers/tools.js` only allows tools present in `fieldsMap`, currently `execute_code`.
+- Current local services are listening on backend 3080, frontend 3090, MongoDB 27017, and Meili 7700.
+- `.env` has subscriptions enabled and uses `Asia/Shanghai` for subscription quota windows.
+- Runtime probe `.codex_work/probe-image-quota.js` loaded `image_gen_oai` and `image_edit_oai`; `loadTools.toString().includes('imageQuotaGuard')` returned `false`.
+- Calling the loaded `image_gen_oai` tool with an empty payload failed at local validation with `Missing required field: prompt`, and image usage event count stayed unchanged (`callDelta: 0`).
+- The proven failing boundary is the active tool-loading path: image quota consumption is supported in lower layers, but the loaded image tools are not wrapped with a guard in the current source path.
+- After implementing guard wiring and rebuilding `packages/api`, the probe reports `mentionsImageQuotaGuard: true` and `hasImageQuotaGuardFactory: true`.
+- With `IMAGE_GEN_OAI_BASEURL` overridden to a dead local URL inside the probe, a valid `image_gen_oai` request consumed quota before the upstream connection error: image event count increased by 1 and the usage bucket has `imageUsed: 1`.
+- A second oversized `n: 10` image request for the same free-plan probe user was denied before upstream with HTTP 429 and a `subscription_quota` body; event count increased again with a released quota event and the bucket stayed at `imageUsed: 1`.

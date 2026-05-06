@@ -282,5 +282,50 @@ describe('Tool Handlers', () => {
       expect(structuredTool).toBeInstanceOf(StructuredSD);
       delete process.env.SD_WEBUI_URL;
     });
+    it('wraps OpenAI image tools with the image quota guard before execution', async () => {
+      const imageQuotaGuard = jest.fn().mockRejectedValue(new Error('image quota blocked'));
+      process.env.IMAGE_GEN_OAI_API_KEY = 'mocked-image-key';
+      process.env.IMAGE_GEN_OAI_BASEURL = 'http://127.0.0.1:1/v1';
+
+      const { loadedTools } = await loadTools({
+        agent: {
+          id: 'agent-image-quota',
+          provider: 'test',
+          model: 'test-model',
+        },
+        user: fakeUser._id,
+        tools: ['image_gen_oai'],
+        functions: true,
+        options: {
+          imageQuotaGuard,
+          req: {
+            user: { id: fakeUser._id.toString() },
+            body: { conversationId: 'conversation-image-quota' },
+          },
+        },
+        imageOutputType: 'png',
+      });
+      const imageTool = loadedTools.find((tool) => tool.name === 'image_gen_oai');
+
+      await expect(
+        imageTool.invoke(
+          {
+            prompt: 'paint a quiet harbor',
+            n: 12,
+          },
+          {
+            toolCall: {
+              id: 'call-image-quota',
+            },
+          },
+        ),
+      ).rejects.toThrow('image quota blocked');
+
+      expect(imageQuotaGuard).toHaveBeenCalledWith({
+        toolName: 'image_gen_oai',
+        amount: 10,
+        requestId: 'call-image-quota',
+      });
+    });
   });
 });
