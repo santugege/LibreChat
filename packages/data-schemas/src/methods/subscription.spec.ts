@@ -177,6 +177,11 @@ type SubscriptionTestMethods = {
   consumeSubscriptionQuota: (
     input: ConsumeSubscriptionQuotaInput,
   ) => Promise<ConsumeSubscriptionQuotaResult>;
+  getSubscriptionUsageBucket: (
+    user: string,
+    windowKey: string,
+    tenantId?: string,
+  ) => Promise<SubscriptionUsageBucketResult | null>;
   createSubscriptionPaymentOrder: (
     input: SubscriptionPaymentOrderInput,
   ) => Promise<SubscriptionPaymentOrderResult | null>;
@@ -296,6 +301,46 @@ describe('subscription methods', () => {
     expect(plans.map((plan) => plan.key)).toEqual(['starter', 'pro']);
     expect(plans[0].textDailyLimit).toBe(50);
     expect(plans[1].imageDailyLimit).toBe(50);
+  });
+
+  test('reads a subscription usage bucket for the current user window and tenant', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const windowStart = new Date('2026-05-05T16:00:00.000Z');
+    const windowEnd = new Date('2026-05-06T16:00:00.000Z');
+
+    await methods.consumeSubscriptionQuota!({
+      user,
+      kind: 'text',
+      amount: 4,
+      limit: 20,
+      windowKey: '2026-05-06',
+      windowStart,
+      windowEnd,
+      requestId: 'text-request',
+      tenantId: 'tenant-a',
+    });
+    await methods.consumeSubscriptionQuota!({
+      user,
+      kind: 'image',
+      amount: 2,
+      limit: 10,
+      windowKey: '2026-05-06',
+      windowStart,
+      windowEnd,
+      requestId: 'image-request',
+      tenantId: 'tenant-a',
+    });
+
+    const bucket = await methods.getSubscriptionUsageBucket!(user, '2026-05-06', 'tenant-a');
+    const tenantlessBucket = await methods.getSubscriptionUsageBucket!(user, '2026-05-06');
+
+    expect(bucket).toMatchObject({
+      windowKey: '2026-05-06',
+      textUsed: 4,
+      imageUsed: 2,
+      tenantId: 'tenant-a',
+    });
+    expect(tenantlessBucket).toBeNull();
   });
 
   test('lists, reads, updates, and deletes all subscription plans for admin management', async () => {

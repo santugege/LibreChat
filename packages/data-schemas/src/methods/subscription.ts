@@ -462,6 +462,24 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
     });
   }
 
+  async function getSubscriptionUsageBucket(
+    userInput: ObjectIdInput,
+    windowKey: string,
+    tenantId?: string,
+  ): Promise<ISubscriptionUsageBucket | null> {
+    return await runAsSystem(async () => {
+      const Bucket = mongoose.models
+        .SubscriptionUsageBucket as Model<ISubscriptionUsageBucket>;
+      const user = toObjectId(userInput);
+
+      return (await Bucket.findOne({
+        user,
+        windowKey,
+        ...getTenantFilter(tenantId),
+      }).lean()) as ISubscriptionUsageBucket | null;
+    });
+  }
+
   async function isSubscriptionQuotaExempt(
     emailInput: string,
     tenantId?: string,
@@ -985,6 +1003,7 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
     createSubscriptionQuotaExemption,
     deleteSubscriptionQuotaExemption,
     isSubscriptionQuotaExempt,
+    getSubscriptionUsageBucket,
     getEnabledSubscriptionPlans,
     findActiveUserSubscription,
     consumeSubscriptionQuota,

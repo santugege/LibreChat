@@ -48,6 +48,11 @@ type SubscriptionQuotaExemptionView = {
   updatedAt?: Date | string;
 };
 
+type SubscriptionUsageBucketView = {
+  textUsed: number;
+  imageUsed: number;
+};
+
 type SubscriptionRouteDb = {
   listSubscriptionPlans: (tenantId?: string) => Promise<SubscriptionPlanView[]>;
   createSubscriptionPlan: (
@@ -76,6 +81,11 @@ type SubscriptionRouteDb = {
     tenantId?: string,
   ) => Promise<ActiveSubscription | null>;
   consumeSubscriptionQuota: QuotaServiceDeps['consumeSubscriptionQuota'];
+  getSubscriptionUsageBucket: (
+    user: string,
+    windowKey: string,
+    tenantId?: string,
+  ) => Promise<SubscriptionUsageBucketView | null>;
   getSubscriptionPaymentOrder: (
     orderId: string,
     user: string,
@@ -444,6 +454,7 @@ function createStatusResponse(
   plan: SubscriptionPlanView,
   subscription: ActiveSubscription | null,
   now: Date,
+  usageBucket: SubscriptionUsageBucketView | null,
 ): SubscriptionStatusResponse {
   const config = getSubscriptionConfig();
   const window = getQuotaWindow(now, config.timezone);
@@ -454,8 +465,8 @@ function createStatusResponse(
     usage: {
       windowKey: window.windowKey,
       resetAt: window.windowEnd.toISOString(),
-      text: { used: 0, limit: plan.textDailyLimit },
-      image: { used: 0, limit: plan.imageDailyLimit },
+      text: { used: usageBucket?.textUsed ?? 0, limit: plan.textDailyLimit },
+      image: { used: usageBucket?.imageUsed ?? 0, limit: plan.imageDailyLimit },
     },
   };
 }
@@ -532,13 +543,16 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
     try {
       const user = getAuthenticatedUser(req);
       const now = new Date();
+      const config = getSubscriptionConfig();
+      const window = getQuotaWindow(now, config.timezone);
       const quota = getQuotaService(quotaDeps);
-      const [plan, activeSubscription] = await Promise.all([
+      const [plan, activeSubscription, usageBucket] = await Promise.all([
         quota.resolvePlan(user.id, now, user.tenantId),
         deps.db.findActiveUserSubscription(user.id, now, user.tenantId),
+        deps.db.getSubscriptionUsageBucket(user.id, window.windowKey, user.tenantId),
       ]);
 
-      res.json(createStatusResponse(plan, activeSubscription, now));
+      res.json(createStatusResponse(plan, activeSubscription, now, usageBucket));
     } catch (error) {
       next(error);
     }

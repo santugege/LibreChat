@@ -101,6 +101,7 @@ function createDb(overrides: Partial<AdminSubscriptionRouteDb> = {}): AdminSubsc
       limit: 200,
       resetAt: new Date('2026-05-03T00:00:00.000Z'),
     }),
+    getSubscriptionUsageBucket: async () => null,
     getSubscriptionPaymentOrder: async () => null,
     listSubscriptionPlans: async () => [plan],
     createSubscriptionPlan: async () => plan,
@@ -202,6 +203,47 @@ describe('createSubscriptionRouter', () => {
     });
     expect(typeof body.usage.windowKey).toBe('string');
     expect(typeof body.usage.resetAt).toBe('string');
+  });
+
+  test('returns persisted text and image usage in current subscription status', async () => {
+    const usageBucketCalls: unknown[] = [];
+    const app = createApp({
+      db: createDb({
+        findActiveUserSubscription: async () => ({
+          planKey: 'pro',
+          status: 'active',
+          startsAt: new Date('2026-05-01T00:00:00.000Z'),
+          expiresAt: new Date('2026-06-01T00:00:00.000Z'),
+        }),
+        getSubscriptionUsageBucket: async (...args: unknown[]) => {
+          usageBucketCalls.push(args);
+          return {
+            textUsed: 7,
+            imageUsed: 3,
+          };
+        },
+      }),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'user-1', tenantId: 'tenant-a' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService,
+    });
+
+    const response = await requestApp(app, '/api/subscriptions/me');
+    const body = await readJson<{
+      usage: {
+        windowKey: string;
+        text: { used: number; limit: number };
+        image: { used: number; limit: number };
+      };
+    }>(response);
+
+    expect(response.status).toBe(200);
+    expect(usageBucketCalls).toEqual([['user-1', body.usage.windowKey, 'tenant-a']]);
+    expect(body.usage.text).toEqual({ used: 7, limit: 200 });
+    expect(body.usage.image).toEqual({ used: 3, limit: 50 });
   });
 
   test('creates payment orders using the authenticated user and request ip', async () => {
