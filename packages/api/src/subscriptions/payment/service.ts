@@ -536,13 +536,16 @@ export function createSubscriptionPaymentService(db: SubscriptionPaymentDb) {
     try {
       const tenantId = getTenantId(order.tenantId);
       const durationDays = await getFulfillmentDurationDays(order, tenantId);
-      await db.createOrExtendUserSubscription({
+      const subscription = await db.createOrExtendUserSubscription({
         user: getOrderId(order.user),
         planKey: order.planKey,
         durationDays,
         sourceOrderId: order._id,
         ...(tenantId !== undefined ? { tenantId } : {}),
       });
+      if (!subscription) {
+        throw new Error('Subscription fulfillment did not create or extend a subscription');
+      }
       const completed = await db.markSubscriptionOrderCompleted(
         notify.outTradeNo,
         lock.fulfillingAt,

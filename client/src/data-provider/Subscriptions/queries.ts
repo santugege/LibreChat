@@ -55,9 +55,9 @@ export const useGetSubscriptionStatus = (
     [QueryKeys.subscriptionStatus],
     () => dataService.getSubscriptionStatus(),
     {
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
-      refetchOnMount: false,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+      refetchOnMount: true,
       ...config,
     },
   );

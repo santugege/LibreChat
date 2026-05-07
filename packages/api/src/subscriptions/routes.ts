@@ -605,6 +605,11 @@ function createRawFormBody(body: unknown): string {
   return params.toString();
 }
 
+function getRawQuery(req: express.Request): string {
+  const queryStart = req.originalUrl.indexOf('?');
+  return queryStart === -1 ? '' : req.originalUrl.slice(queryStart + 1);
+}
+
 function serializeOrder(order: SubscriptionPaymentOrderView) {
   return {
     orderId: getObjectId(order._id),
@@ -903,6 +908,16 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
       }
     },
   );
+
+  router.get('/payment/webhook/zpay', async (req, res, next) => {
+    try {
+      const payment = deps.createPaymentService(deps.db);
+      await payment.handleZPayNotify(getRawQuery(req));
+      res.status(200).send('success');
+    } catch (error) {
+      next(error);
+    }
+  });
 
   router.post(
     '/payment/webhook/zpay',

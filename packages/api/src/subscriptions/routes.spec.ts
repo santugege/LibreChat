@@ -399,6 +399,34 @@ describe('createSubscriptionRouter', () => {
     expect(rawBodies).toEqual(['out_trade_no=lc_order_1&trade_no=zpay-trade-1']);
   });
 
+  test('handles ZPay GET webhooks without JWT auth', async () => {
+    const rawBodies: string[] = [];
+    const app = createApp({
+      db: createDb(),
+      requireJwtAuth: () => {
+        throw new Error('webhook should not require JWT auth');
+      },
+      requireAdminAccess,
+      createPaymentService: () => ({
+        createOrder: async () => {
+          throw new Error('should not create order');
+        },
+        handleZPayNotify: async (rawBody: string) => {
+          rawBodies.push(rawBody);
+        },
+      }),
+    });
+
+    const response = await requestApp(
+      app,
+      '/api/subscriptions/payment/webhook/zpay?out_trade_no=lc_order_1&trade_no=zpay-trade-1',
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('success');
+    expect(rawBodies).toEqual(['out_trade_no=lc_order_1&trade_no=zpay-trade-1']);
+  });
+
   test('admin routes manage subscription plans for the authenticated tenant', async () => {
     const allPlans: SubscriptionPlanView[] = [
       plan,

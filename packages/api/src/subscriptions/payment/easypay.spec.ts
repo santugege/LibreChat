@@ -148,6 +148,7 @@ const plan = {
   sortOrder: 1,
 };
 const fulfillmentLock = { fulfillingAt: new Date('2026-05-02T00:00:00.000Z') };
+const fulfilledSubscription = { _id: 'subscription-id-1', user: 'user-1', planKey: 'pro' };
 
 function setZPayEnv(): void {
   process.env.ZPAY_API_BASE = 'https://zpay.example///';
@@ -512,7 +513,7 @@ describe('createSubscriptionPaymentService', () => {
       createOrExtendUserSubscription: async (input) => {
         subscriptionInput = input;
         calls.push('subscription');
-        return null;
+        return fulfilledSubscription;
       },
       markSubscriptionOrderCompleted: async (_outTradeNo, fulfillingAt) => {
         calls.push('completed');
@@ -575,7 +576,7 @@ describe('createSubscriptionPaymentService', () => {
       createOrExtendUserSubscription: async (input) => {
         subscriptionInput = input;
         calls.push('subscription');
-        return null;
+        return fulfilledSubscription;
       },
       markSubscriptionOrderCompleted: async (_outTradeNo, fulfillingAt) => {
         calls.push('completed');
@@ -652,7 +653,7 @@ describe('createSubscriptionPaymentService', () => {
       createOrExtendUserSubscription: async (input) => {
         subscriptionInput = input;
         calls.push('subscription');
-        return null;
+        return fulfilledSubscription;
       },
     };
 
@@ -698,6 +699,71 @@ describe('createSubscriptionPaymentService', () => {
     );
   });
 
+  test('marks fulfillment failed when subscription fulfillment returns no subscription', async () => {
+    const calls: string[] = [];
+    const payload = {
+      pid: '1000',
+      trade_no: 'zpay-trade-1',
+      out_trade_no: 'lc_order_1',
+      money: '29.50',
+      trade_status: 'TRADE_SUCCESS',
+    };
+    const sign = signEasyPay(payload, 'secret');
+    const rawBody = new URLSearchParams({ ...payload, sign, sign_type: 'MD5' }).toString();
+    const db = createPaymentDb({
+      findSubscriptionPaymentOrderByTradeNo: async () => ({
+        _id: 'order-id-1',
+        user: 'user-1',
+        outTradeNo: 'lc_order_1',
+        planKey: 'pro',
+        durationDays: 30,
+        amount: 29.5,
+        paymentType: 'alipay',
+        status: 'pending',
+      }),
+      markSubscriptionOrderPaid: async () => {
+        calls.push('paid');
+        return null;
+      },
+      markSubscriptionOrderFulfilling: async () => {
+        calls.push('fulfilling');
+        return fulfillmentLock;
+      },
+      createOrExtendUserSubscription: async () => {
+        calls.push('subscription');
+        return null;
+      },
+      markSubscriptionOrderCompleted: async () => {
+        calls.push('completed');
+        return {
+          _id: 'order-id-1',
+          user: 'user-1',
+          outTradeNo: 'lc_order_1',
+          planKey: 'pro',
+          amount: 29.5,
+          paymentType: 'alipay',
+          status: 'completed',
+        };
+      },
+      markSubscriptionOrderFailed: async (_outTradeNo, reason, fulfillingAt) => {
+        expect(fulfillingAt).toEqual(fulfillmentLock.fulfillingAt);
+        calls.push(`failed:${reason}`);
+        return null;
+      },
+    });
+
+    await expect(createSubscriptionPaymentService(db).handleZPayNotify(rawBody)).rejects.toThrow(
+      'Subscription fulfillment did not create or extend a subscription',
+    );
+
+    expect(calls).toEqual([
+      'paid',
+      'fulfilling',
+      'subscription',
+      'failed:Subscription fulfillment did not create or extend a subscription',
+    ]);
+  });
+
   test('marks fulfillment failed when the completed status update is missed', async () => {
     const calls: string[] = [];
     const payload = {
@@ -729,7 +795,7 @@ describe('createSubscriptionPaymentService', () => {
       },
       createOrExtendUserSubscription: async () => {
         calls.push('subscription');
-        return null;
+        return fulfilledSubscription;
       },
       markSubscriptionOrderCompleted: async (_outTradeNo, fulfillingAt) => {
         calls.push('completed');

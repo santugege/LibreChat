@@ -19,6 +19,7 @@ import AdminQuotaExemptionManager from './AdminQuotaExemptionManager';
 import AdminPlanManager from './AdminPlanManager';
 import PlanList from './PlanList';
 import UsageMeter from './UsageMeter';
+import { useRefreshSubscriptionStatusOnCompletedOrder } from './hooks';
 
 type PaymentType = TCreateSubscriptionOrderRequest['paymentType'];
 type PaymentInstructions = {
@@ -53,6 +54,8 @@ function Subscription() {
   const currentPlan = statusQuery.data?.plan;
   const usage = statusQuery.data?.usage;
   const order = orderQuery.data;
+  useRefreshSubscriptionStatusOnCompletedOrder(order);
+
   const paymentQrCode = order?.qrCode ?? paymentInstructions?.qrCode ?? '';
   const paymentHref =
     order?.qrCode ?? order?.payUrl ?? paymentInstructions?.qrCode ?? paymentInstructions?.url ?? '';

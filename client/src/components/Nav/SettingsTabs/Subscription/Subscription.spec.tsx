@@ -1,15 +1,17 @@
 import React from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { SystemRoles } from 'librechat-data-provider';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { QueryKeys, SystemRoles } from 'librechat-data-provider';
 import type {
   TCreateSubscriptionOrderRequest,
   TCreateSubscriptionOrderResponse,
   TSubscriptionQuotaExemption,
+  TSubscriptionOrder,
   TSubscriptionPlan,
   TSubscriptionStatus,
 } from 'librechat-data-provider';
 import Subscription from './Subscription';
 
+const mockInvalidateQueries = jest.fn();
 const mockUseAuthContext = jest.fn();
 const mockUseGetStartupConfig = jest.fn();
 const mockUseGetSubscriptionPlans = jest.fn();
@@ -28,6 +30,12 @@ const mockUpdateSubscriptionAdminPlan = jest.fn();
 const mockDeleteSubscriptionAdminPlan = jest.fn();
 const mockCreateSubscriptionQuotaExemption = jest.fn();
 const mockDeleteSubscriptionQuotaExemption = jest.fn();
+
+jest.mock('@tanstack/react-query', () => ({
+  useQueryClient: () => ({
+    invalidateQueries: mockInvalidateQueries,
+  }),
+}));
 
 jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string, values?: Record<string, unknown>) =>
@@ -141,6 +149,7 @@ describe('Subscription settings tab', () => {
   afterEach(() => {
     jest.restoreAllMocks();
     jest.resetAllMocks();
+    mockInvalidateQueries.mockReset();
   });
 
   it('renders the current plan, usage meters, and available plans', () => {
@@ -251,6 +260,56 @@ describe('Subscription settings tab', () => {
 
     expect(openSpy).toHaveBeenCalledWith('', '_blank');
     expect(paymentWindow.location.href).toBe('https://zpay.example/pay');
+  });
+
+  it('refreshes subscription status when a paid order completes', async () => {
+    const paymentWindow = {
+      location: { href: '' },
+      opener: window,
+      close: jest.fn(),
+    } as unknown as Window;
+    jest.spyOn(window, 'open').mockReturnValue(paymentWindow);
+    const completedOrder: TSubscriptionOrder = {
+      orderId: 'order-1',
+      outTradeNo: 'trade-1',
+      status: 'completed',
+      expiresAt: '2026-05-05T00:00:00.000Z',
+      planKey: 'pro_monthly',
+      amount: 29.9,
+      completedAt: '2026-05-04T00:00:00.000Z',
+    };
+    const mutate = jest.fn(
+      (
+        _: TCreateSubscriptionOrderRequest,
+        options: { onSuccess: (order: TCreateSubscriptionOrderResponse) => void },
+      ) => {
+        options.onSuccess({
+          orderId: 'order-1',
+          outTradeNo: 'trade-1',
+          status: 'pending',
+          payUrl: 'https://zpay.example/pay',
+          expiresAt: '2026-05-05T00:00:00.000Z',
+        });
+      },
+    );
+    mockUseGetStartupConfig.mockReturnValue({
+      data: { subscriptions: { enabled: true, paymentConfigured: true } },
+    });
+    mockUseCreateSubscriptionOrder.mockReturnValue({ mutate, isLoading: false });
+    mockUseGetSubscriptionOrder.mockImplementation((orderId: string) => ({
+      data: orderId === 'order-1' ? completedOrder : undefined,
+    }));
+
+    render(<Subscription />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_nav_subscription_alipay' }));
+
+    await waitFor(() => {
+      expect(mockInvalidateQueries).toHaveBeenCalledWith({
+        queryKey: [QueryKeys.subscriptionStatus],
+        refetchType: 'all',
+      });
+    });
   });
 
   it('shows plan management for admins', () => {

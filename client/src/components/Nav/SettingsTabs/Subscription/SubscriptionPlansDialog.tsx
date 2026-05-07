@@ -14,6 +14,7 @@ import {
 } from '~/data-provider';
 import { useAuthContext, useLocalize } from '~/hooks';
 import PlanList from './PlanList';
+import { useRefreshSubscriptionStatusOnCompletedOrder } from './hooks';
 
 type PaymentType = TCreateSubscriptionOrderRequest['paymentType'];
 type PaymentInstructions = {
@@ -49,6 +50,8 @@ function SubscriptionPlansDialog({ open, onOpenChange }: SubscriptionPlansDialog
 
   const plans = useMemo<TSubscriptionPlan[]>(() => plansQuery.data ?? [], [plansQuery.data]);
   const order = orderQuery.data;
+  useRefreshSubscriptionStatusOnCompletedOrder(order);
+
   const paymentQrCode = order?.qrCode ?? paymentInstructions?.qrCode ?? '';
   const paymentHref =
     order?.qrCode ?? order?.payUrl ?? paymentInstructions?.qrCode ?? paymentInstructions?.url ?? '';

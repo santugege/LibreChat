@@ -72,7 +72,9 @@ describe('subscription queries', () => {
       [QueryKeys.subscriptionStatus],
       expect.any(Function),
       expect.objectContaining({
-        refetchOnWindowFocus: false,
+        refetchOnWindowFocus: true,
+        refetchOnReconnect: true,
+        refetchOnMount: true,
       }),
     );
 
