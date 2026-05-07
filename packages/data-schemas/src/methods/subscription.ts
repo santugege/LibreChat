@@ -84,6 +84,43 @@ export type CreateSubscriptionPaymentOrderInput = {
   tenantId?: string;
 };
 
+export type CountSubscriptionPaymentOrdersInput = {
+  status?: SubscriptionOrderStatus;
+  tenantId?: string;
+};
+
+export type ListSubscriptionPaymentOrdersInput = CountSubscriptionPaymentOrdersInput & {
+  limit: number;
+  offset: number;
+};
+
+export type SubscriptionPaymentOrderListUser = {
+  id: string;
+  name?: string;
+  username?: string;
+  email?: string;
+  avatar?: string;
+};
+
+export type SubscriptionPaymentOrderListItem = {
+  id: string;
+  outTradeNo: string;
+  tradeNo?: string;
+  userId: string;
+  user?: SubscriptionPaymentOrderListUser;
+  planKey: string;
+  amount: number;
+  paymentType: SubscriptionPaymentType;
+  status: SubscriptionOrderStatus;
+  expiresAt: Date;
+  createdAt?: Date;
+  updatedAt?: Date;
+  paidAt?: Date;
+  completedAt?: Date;
+  failedAt?: Date;
+  failedReason?: string;
+};
+
 export type CreateOrExtendUserSubscriptionInput = {
   user: ObjectIdInput;
   planKey: string;
@@ -99,6 +136,16 @@ export type SubscriptionPaymentOrderLock = {
 
 function getTenantFilter(tenantId?: string): { tenantId: string | null } {
   return { tenantId: tenantId ?? null };
+}
+
+function getPaymentOrderFilter(input: CountSubscriptionPaymentOrdersInput): {
+  tenantId: string | null;
+  status?: SubscriptionOrderStatus;
+} {
+  return {
+    ...getTenantFilter(input.tenantId),
+    ...(input.status ? { status: input.status } : {}),
+  };
 }
 
 function normalizeEmail(email: string): string {
@@ -749,6 +796,100 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
     });
   }
 
+  async function listSubscriptionPaymentOrders(
+    input: ListSubscriptionPaymentOrdersInput,
+  ): Promise<SubscriptionPaymentOrderListItem[]> {
+    return await runAsSystem(async () => {
+      const Order = mongoose.models.SubscriptionPaymentOrder as Model<ISubscriptionPaymentOrder>;
+      const rows = await Order.aggregate<{
+        _id: Types.ObjectId;
+        outTradeNo: string;
+        tradeNo?: string;
+        user: Types.ObjectId;
+        userInfo?: Array<{
+          _id: Types.ObjectId;
+          name?: string;
+          username?: string;
+          email?: string;
+          avatar?: string;
+        }>;
+        planKey: string;
+        amount: number;
+        paymentType: SubscriptionPaymentType;
+        status: SubscriptionOrderStatus;
+        expiresAt: Date;
+        createdAt?: Date;
+        updatedAt?: Date;
+        paidAt?: Date;
+        completedAt?: Date;
+        failedAt?: Date;
+        failedReason?: string;
+      }>([
+        { $match: getPaymentOrderFilter(input) },
+        { $sort: { createdAt: -1, _id: -1 } },
+        { $skip: input.offset },
+        { $limit: input.limit },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'user',
+            foreignField: '_id',
+            as: 'userInfo',
+          },
+        },
+        {
+          $project: {
+            rawNotify: 0,
+            payUrl: 0,
+            qrCode: 0,
+          },
+        },
+      ]);
+
+      return rows.map((row) => {
+        const user = row.userInfo?.[0];
+        const userId = row.user.toString();
+        return {
+          id: row._id.toString(),
+          outTradeNo: row.outTradeNo,
+          ...(row.tradeNo ? { tradeNo: row.tradeNo } : {}),
+          userId,
+          ...(user
+            ? {
+                user: {
+                  id: user._id.toString(),
+                  ...(user.name ? { name: user.name } : {}),
+                  ...(user.username ? { username: user.username } : {}),
+                  ...(user.email ? { email: user.email } : {}),
+                  ...(user.avatar ? { avatar: user.avatar } : {}),
+                },
+              }
+            : {}),
+          planKey: row.planKey,
+          amount: row.amount,
+          paymentType: row.paymentType,
+          status: row.status,
+          expiresAt: row.expiresAt,
+          ...(row.createdAt ? { createdAt: row.createdAt } : {}),
+          ...(row.updatedAt ? { updatedAt: row.updatedAt } : {}),
+          ...(row.paidAt ? { paidAt: row.paidAt } : {}),
+          ...(row.completedAt ? { completedAt: row.completedAt } : {}),
+          ...(row.failedAt ? { failedAt: row.failedAt } : {}),
+          ...(row.failedReason ? { failedReason: row.failedReason } : {}),
+        };
+      });
+    });
+  }
+
+  async function countSubscriptionPaymentOrders(
+    input: CountSubscriptionPaymentOrdersInput,
+  ): Promise<number> {
+    return await runAsSystem(async () => {
+      const Order = mongoose.models.SubscriptionPaymentOrder as Model<ISubscriptionPaymentOrder>;
+      return await Order.countDocuments(getPaymentOrderFilter(input));
+    });
+  }
+
   async function markSubscriptionOrderPaid(
     outTradeNo: string,
     tradeNo: string,
@@ -1010,6 +1151,8 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
     createSubscriptionPaymentOrder,
     findSubscriptionPaymentOrderByTradeNo,
     getSubscriptionPaymentOrder,
+    listSubscriptionPaymentOrders,
+    countSubscriptionPaymentOrders,
     markSubscriptionOrderPaid,
     markSubscriptionOrderFulfilling,
     markSubscriptionOrderCompleted,

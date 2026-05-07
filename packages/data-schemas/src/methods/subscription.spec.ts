@@ -101,6 +101,31 @@ type SubscriptionPaymentOrderResult = Omit<SubscriptionPaymentOrderInput, 'user'
   tenantId?: string | null;
 };
 
+type SubscriptionPaymentOrderListItemResult = {
+  id: string;
+  outTradeNo: string;
+  tradeNo?: string;
+  userId: string;
+  user?: {
+    id: string;
+    name?: string;
+    username?: string;
+    email?: string;
+    avatar?: string;
+  };
+  planKey: string;
+  amount: number;
+  paymentType: 'alipay' | 'wxpay';
+  status: 'pending' | 'paid' | 'fulfilling' | 'completed' | 'expired' | 'cancelled' | 'failed';
+  expiresAt: Date;
+  createdAt?: Date;
+  updatedAt?: Date;
+  paidAt?: Date;
+  completedAt?: Date;
+  failedAt?: Date;
+  failedReason?: string;
+};
+
 type SubscriptionPaymentOrderLockResult = {
   fulfillingAt: Date;
 };
@@ -188,6 +213,16 @@ type SubscriptionTestMethods = {
   findSubscriptionPaymentOrderByTradeNo: (
     outTradeNo: string,
   ) => Promise<SubscriptionPaymentOrderResult | null>;
+  listSubscriptionPaymentOrders: (input: {
+    limit: number;
+    offset: number;
+    status?: 'pending' | 'paid' | 'fulfilling' | 'completed' | 'expired' | 'cancelled' | 'failed';
+    tenantId?: string;
+  }) => Promise<SubscriptionPaymentOrderListItemResult[]>;
+  countSubscriptionPaymentOrders: (input: {
+    status?: 'pending' | 'paid' | 'fulfilling' | 'completed' | 'expired' | 'cancelled' | 'failed';
+    tenantId?: string;
+  }) => Promise<number>;
   markSubscriptionOrderPaid: (
     outTradeNo: string,
     tradeNo: string,
@@ -712,6 +747,125 @@ describe('subscription methods', () => {
     expect(duplicateLock).toBeNull();
     expect(completed).toMatchObject({ status: 'completed' });
     expect(completed?.completedAt).toBeInstanceOf(Date);
+  });
+
+  test('lists subscription payment orders newest first with user display fields', async () => {
+    const User = mongoose.models.User as mongoose.Model<{
+      name: string;
+      username: string;
+      email: string;
+      avatar?: string;
+      provider: string;
+      emailVerified: boolean;
+    }>;
+    const user = await User.create({
+      name: 'Ada Lovelace',
+      username: 'ada',
+      email: 'ada@example.com',
+      provider: 'local',
+      emailVerified: true,
+    });
+    const older = await methods.createSubscriptionPaymentOrder!({
+      user: user._id.toString(),
+      outTradeNo: 'older-order',
+      planKey: 'pro',
+      amount: 29.5,
+      paymentType: 'alipay',
+      status: 'pending',
+      expiresAt: new Date('2026-05-07T12:00:00.000Z'),
+    });
+    const newer = await methods.createSubscriptionPaymentOrder!({
+      user: user._id.toString(),
+      outTradeNo: 'newer-order',
+      tradeNo: 'zpay-1',
+      planKey: 'pro',
+      amount: 39.5,
+      paymentType: 'wxpay',
+      status: 'completed',
+      expiresAt: new Date('2026-05-08T12:00:00.000Z'),
+    });
+
+    await mongoose.models.SubscriptionPaymentOrder.updateOne(
+      { _id: older?._id },
+      { $set: { createdAt: new Date('2026-05-07T09:00:00.000Z') } },
+    );
+    await mongoose.models.SubscriptionPaymentOrder.updateOne(
+      { _id: newer?._id },
+      {
+        $set: {
+          createdAt: new Date('2026-05-07T10:00:00.000Z'),
+          paidAt: new Date('2026-05-07T10:02:00.000Z'),
+          completedAt: new Date('2026-05-07T10:03:00.000Z'),
+          rawNotify: 'secret-provider-payload',
+          payUrl: 'https://pay.example/secret',
+          qrCode: 'secret-qr',
+        },
+      },
+    );
+
+    const orders = await methods.listSubscriptionPaymentOrders!({ limit: 10, offset: 0 });
+    const total = await methods.countSubscriptionPaymentOrders!({});
+
+    expect(total).toBe(2);
+    expect(orders.map((order) => order.outTradeNo)).toEqual(['newer-order', 'older-order']);
+    expect(orders[0].userId).toBe(user._id.toString());
+    expect(orders[0].user).toEqual({
+      id: user._id.toString(),
+      name: 'Ada Lovelace',
+      username: 'ada',
+      email: 'ada@example.com',
+    });
+    expect(orders[0]).not.toHaveProperty('rawNotify');
+    expect(orders[0]).not.toHaveProperty('payUrl');
+    expect(orders[0]).not.toHaveProperty('qrCode');
+  });
+
+  test('filters subscription payment orders by status and tenant', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    await methods.createSubscriptionPaymentOrder!({
+      user,
+      outTradeNo: 'tenant-completed',
+      planKey: 'pro',
+      amount: 29.5,
+      paymentType: 'alipay',
+      status: 'completed',
+      expiresAt: new Date('2026-05-08T12:00:00.000Z'),
+      tenantId: 'tenant-a',
+    });
+    await methods.createSubscriptionPaymentOrder!({
+      user,
+      outTradeNo: 'tenant-pending',
+      planKey: 'pro',
+      amount: 29.5,
+      paymentType: 'alipay',
+      status: 'pending',
+      expiresAt: new Date('2026-05-08T12:00:00.000Z'),
+      tenantId: 'tenant-a',
+    });
+    await methods.createSubscriptionPaymentOrder!({
+      user,
+      outTradeNo: 'other-tenant-completed',
+      planKey: 'pro',
+      amount: 29.5,
+      paymentType: 'alipay',
+      status: 'completed',
+      expiresAt: new Date('2026-05-08T12:00:00.000Z'),
+      tenantId: 'tenant-b',
+    });
+
+    const orders = await methods.listSubscriptionPaymentOrders!({
+      limit: 10,
+      offset: 0,
+      status: 'completed',
+      tenantId: 'tenant-a',
+    });
+    const total = await methods.countSubscriptionPaymentOrders!({
+      status: 'completed',
+      tenantId: 'tenant-a',
+    });
+
+    expect(total).toBe(1);
+    expect(orders.map((order) => order.outTradeNo)).toEqual(['tenant-completed']);
   });
 
   test('reacquires stale fulfilling payment order locks', async () => {
