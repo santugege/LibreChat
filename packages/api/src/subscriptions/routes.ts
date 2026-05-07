@@ -1,5 +1,10 @@
 import express from 'express';
 
+import type {
+  TSubscriptionAdminOrder,
+  TSubscriptionAdminOrdersResponse,
+  TSubscriptionOrderStatus,
+} from 'librechat-data-provider';
 import type { QuotaServiceDeps } from './quota';
 import type {
   CreateZPayOrderInput,
@@ -8,6 +13,7 @@ import type {
   SubscriptionPaymentOrderStatus,
 } from './payment/service';
 import type { SubscriptionPlanView } from './types';
+import { parsePagination } from '../admin/pagination';
 import { getSubscriptionConfig } from './config';
 import { createQuotaService } from './quota';
 import { getQuotaWindow } from './windows';
@@ -39,6 +45,41 @@ type SubscriptionPaymentOrderView = {
   qrCode?: string;
   expiresAt: Date;
   completedAt?: Date;
+};
+
+type SubscriptionAdminPaymentOrderView = {
+  id: string;
+  outTradeNo: string;
+  tradeNo?: string;
+  userId: string;
+  user?: {
+    id: string;
+    name?: string;
+    username?: string;
+    email?: string;
+    avatar?: string;
+  };
+  planKey: string;
+  amount: number;
+  paymentType: 'alipay' | 'wxpay';
+  status: TSubscriptionOrderStatus;
+  expiresAt: Date;
+  createdAt?: Date;
+  updatedAt?: Date;
+  paidAt?: Date;
+  completedAt?: Date;
+  failedAt?: Date;
+  failedReason?: string;
+};
+
+type CountSubscriptionPaymentOrdersInput = {
+  status?: TSubscriptionOrderStatus;
+  tenantId?: string;
+};
+
+type ListSubscriptionPaymentOrdersInput = CountSubscriptionPaymentOrdersInput & {
+  limit: number;
+  offset: number;
 };
 
 type SubscriptionQuotaExemptionView = {
@@ -91,6 +132,10 @@ type SubscriptionRouteDb = {
     user: string,
     tenantId?: string,
   ) => Promise<SubscriptionPaymentOrderView | null>;
+  listSubscriptionPaymentOrders: (
+    input: ListSubscriptionPaymentOrdersInput,
+  ) => Promise<SubscriptionAdminPaymentOrderView[]>;
+  countSubscriptionPaymentOrders: (input: CountSubscriptionPaymentOrdersInput) => Promise<number>;
 };
 
 type SubscriptionPaymentRouteService = {
@@ -128,6 +173,17 @@ type StringRecord = {
 
 const invalidSubscriptionPlanRequestMessage = 'Invalid subscription plan request';
 const invalidQuotaExemptionRequestMessage = 'Invalid subscription quota exemption request';
+const invalidSubscriptionPaymentOrderRequestMessage =
+  'Invalid subscription payment order request';
+const subscriptionOrderStatuses = new Set<TSubscriptionOrderStatus>([
+  'pending',
+  'paid',
+  'fulfilling',
+  'completed',
+  'expired',
+  'cancelled',
+  'failed',
+]);
 const subscriptionPlanCreateKeys = [
   'key',
   'name',
@@ -181,6 +237,35 @@ function getCreateOrderBody(body: unknown): CreateZPayOrderInput['body'] {
     planKey,
     paymentType,
     ...(typeof isMobile === 'boolean' ? { isMobile } : {}),
+  };
+}
+
+function getQueryString(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return getQueryString(value[0]);
+  }
+
+  return undefined;
+}
+
+function getAdminOrdersQuery(query: express.Request['query']): ListSubscriptionPaymentOrdersInput {
+  const status = getQueryString(query.status);
+  const pagination = parsePagination({
+    limit: getQueryString(query.limit),
+    offset: getQueryString(query.offset),
+  });
+
+  if (status && !subscriptionOrderStatuses.has(status as TSubscriptionOrderStatus)) {
+    throwInvalidSubscriptionPaymentOrderRequest();
+  }
+
+  return {
+    ...pagination,
+    ...(status ? { status: status as TSubscriptionOrderStatus } : {}),
   };
 }
 
@@ -375,6 +460,10 @@ function throwInvalidQuotaExemptionRequest(): never {
   throw new Error(invalidQuotaExemptionRequestMessage);
 }
 
+function throwInvalidSubscriptionPaymentOrderRequest(): never {
+  throw new Error(invalidSubscriptionPaymentOrderRequestMessage);
+}
+
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
@@ -409,6 +498,12 @@ function isInvalidQuotaExemptionRequest(error: unknown): boolean {
   return error instanceof Error && error.message === invalidQuotaExemptionRequestMessage;
 }
 
+function isInvalidSubscriptionPaymentOrderRequest(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message === invalidSubscriptionPaymentOrderRequestMessage
+  );
+}
+
 function handleSubscriptionPlanRouteError(
   error: unknown,
   res: express.Response,
@@ -429,6 +524,19 @@ function handleQuotaExemptionRouteError(
 ): void {
   if (isInvalidQuotaExemptionRequest(error)) {
     res.status(400).json({ message: invalidQuotaExemptionRequestMessage });
+    return;
+  }
+
+  next(error);
+}
+
+function handleSubscriptionPaymentOrderRouteError(
+  error: unknown,
+  res: express.Response,
+  next: express.NextFunction,
+): void {
+  if (isInvalidSubscriptionPaymentOrderRequest(error)) {
+    res.status(400).json({ message: invalidSubscriptionPaymentOrderRequestMessage });
     return;
   }
 
@@ -508,6 +616,37 @@ function serializeOrder(order: SubscriptionPaymentOrderView) {
     planKey: order.planKey,
     amount: order.amount,
     ...(order.completedAt ? { completedAt: order.completedAt.toISOString() } : {}),
+  };
+}
+
+function serializeDate(date: Date | undefined): string | undefined {
+  return date ? date.toISOString() : undefined;
+}
+
+function serializeAdminOrder(order: SubscriptionAdminPaymentOrderView): TSubscriptionAdminOrder {
+  const createdAt = serializeDate(order.createdAt);
+  const updatedAt = serializeDate(order.updatedAt);
+  const paidAt = serializeDate(order.paidAt);
+  const completedAt = serializeDate(order.completedAt);
+  const failedAt = serializeDate(order.failedAt);
+
+  return {
+    id: order.id,
+    outTradeNo: order.outTradeNo,
+    ...(order.tradeNo ? { tradeNo: order.tradeNo } : {}),
+    userId: order.userId,
+    ...(order.user ? { user: order.user } : {}),
+    planKey: order.planKey,
+    amount: order.amount,
+    paymentType: order.paymentType,
+    status: order.status,
+    expiresAt: order.expiresAt.toISOString(),
+    ...(createdAt ? { createdAt } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+    ...(paidAt ? { paidAt } : {}),
+    ...(completedAt ? { completedAt } : {}),
+    ...(failedAt ? { failedAt } : {}),
+    ...(order.failedReason ? { failedReason: order.failedReason } : {}),
   };
 }
 
@@ -593,6 +732,40 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
       next(error);
     }
   });
+
+  router.get(
+    '/admin/orders',
+    deps.requireJwtAuth,
+    deps.requireAdminAccess,
+    async (req, res, next) => {
+      try {
+        const user = getAuthenticatedUser(req);
+        const query = getAdminOrdersQuery(req.query);
+        const filter = {
+          ...(query.status ? { status: query.status } : {}),
+          ...(user.tenantId ? { tenantId: user.tenantId } : {}),
+        };
+        const [orders, total] = await Promise.all([
+          deps.db.listSubscriptionPaymentOrders({
+            ...filter,
+            limit: query.limit,
+            offset: query.offset,
+          }),
+          deps.db.countSubscriptionPaymentOrders(filter),
+        ]);
+        const response: TSubscriptionAdminOrdersResponse = {
+          orders: orders.map(serializeAdminOrder),
+          total,
+          limit: query.limit,
+          offset: query.offset,
+        };
+
+        res.json(response);
+      } catch (error) {
+        handleSubscriptionPaymentOrderRouteError(error, res, next);
+      }
+    },
+  );
 
   router.get(
     '/admin/plans',

@@ -25,6 +25,28 @@ const plan: SubscriptionPlanView = {
   sortOrder: 1,
 };
 
+const adminOrder = {
+  id: 'order-1',
+  outTradeNo: 'LC-20260507-1',
+  tradeNo: 'zpay-1',
+  userId: 'user-1',
+  user: {
+    id: 'user-1',
+    name: 'Ada Lovelace',
+    username: 'ada',
+    email: 'ada@example.com',
+    avatar: 'https://example.com/avatar.png',
+  },
+  planKey: 'pro',
+  amount: 29.5,
+  paymentType: 'alipay' as const,
+  status: 'completed' as const,
+  expiresAt: new Date('2026-05-07T12:00:00.000Z'),
+  createdAt: new Date('2026-05-07T10:00:00.000Z'),
+  paidAt: new Date('2026-05-07T10:02:00.000Z'),
+  completedAt: new Date('2026-05-07T10:03:00.000Z'),
+};
+
 function createApp(deps: Parameters<typeof createSubscriptionRouter>[0]) {
   const app = express();
   app.use(express.json());
@@ -111,6 +133,8 @@ function createDb(overrides: Partial<AdminSubscriptionRouteDb> = {}): AdminSubsc
     createSubscriptionQuotaExemption: async (input) => ({ email: input.email }),
     deleteSubscriptionQuotaExemption: async (email) => ({ email }),
     isSubscriptionQuotaExempt: async () => false,
+    listSubscriptionPaymentOrders: async () => [],
+    countSubscriptionPaymentOrders: async () => 0,
     ...overrides,
   };
 }
@@ -482,6 +506,108 @@ describe('createSubscriptionRouter', () => {
 
     expect(response.status).toBe(403);
     expect(await readJson<{ message: string }>(response)).toEqual({ message: 'admin required' });
+  });
+
+  test('returns admin payment orders with pagination and tenant scope', async () => {
+    const listSubscriptionPaymentOrders = jest.fn().mockResolvedValue([adminOrder]);
+    const countSubscriptionPaymentOrders = jest.fn().mockResolvedValue(1);
+    const app = createApp({
+      db: createDb({ listSubscriptionPaymentOrders, countSubscriptionPaymentOrders }),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'admin-1', tenantId: 'tenant-a' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService,
+    });
+
+    const response = await requestApp(
+      app,
+      '/api/subscriptions/admin/orders?limit=25&offset=50&status=completed',
+    );
+    const body = await readJson<{
+      orders: Array<{ id: string; status: string; createdAt: string }>;
+      total: number;
+      limit: number;
+      offset: number;
+    }>(response);
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({
+      orders: [
+        {
+          id: 'order-1',
+          outTradeNo: 'LC-20260507-1',
+          tradeNo: 'zpay-1',
+          userId: 'user-1',
+          user: {
+            id: 'user-1',
+            name: 'Ada Lovelace',
+            username: 'ada',
+            email: 'ada@example.com',
+            avatar: 'https://example.com/avatar.png',
+          },
+          planKey: 'pro',
+          amount: 29.5,
+          paymentType: 'alipay',
+          status: 'completed',
+          expiresAt: '2026-05-07T12:00:00.000Z',
+          createdAt: '2026-05-07T10:00:00.000Z',
+          paidAt: '2026-05-07T10:02:00.000Z',
+          completedAt: '2026-05-07T10:03:00.000Z',
+        },
+      ],
+      total: 1,
+      limit: 25,
+      offset: 50,
+    });
+    expect(listSubscriptionPaymentOrders).toHaveBeenCalledWith({
+      limit: 25,
+      offset: 50,
+      status: 'completed',
+      tenantId: 'tenant-a',
+    });
+    expect(countSubscriptionPaymentOrders).toHaveBeenCalledWith({
+      status: 'completed',
+      tenantId: 'tenant-a',
+    });
+  });
+
+  test('rejects invalid admin payment order status', async () => {
+    const app = createApp({
+      db: createDb(),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'admin-1' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService,
+    });
+
+    const response = await requestApp(app, '/api/subscriptions/admin/orders?status=not-a-status');
+    const body = await readJson<{ message: string }>(response);
+
+    expect(response.status).toBe(400);
+    expect(body).toEqual({ message: 'Invalid subscription payment order request' });
+  });
+
+  test('runs admin middleware for payment order list', async () => {
+    const requireAdminAccessSpy: express.RequestHandler = (_req, res) => {
+      res.status(403).json({ message: 'Forbidden' });
+    };
+    const app = createApp({
+      db: createDb(),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'user-1' };
+        next();
+      },
+      requireAdminAccess: requireAdminAccessSpy,
+      createPaymentService,
+    });
+
+    const response = await requestApp(app, '/api/subscriptions/admin/orders');
+
+    expect(response.status).toBe(403);
   });
 
   test('admin routes manage quota exemption emails for the authenticated tenant', async () => {
