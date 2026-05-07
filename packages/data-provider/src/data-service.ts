@@ -117,6 +117,16 @@ export function getUserBalance(): Promise<t.TBalanceResponse> {
   return request.get(endpoints.balance());
 }
 
+export function getAdminUsers(params: t.TAdminPageParams = {}): Promise<t.TAdminUsersResponse> {
+  return request.get(endpoints.adminUsers(params));
+}
+
+export function searchAdminUsers(
+  params: t.TAdminUserSearchParams,
+): Promise<t.TAdminUserSearchResponse> {
+  return request.get(endpoints.adminUserSearch(params));
+}
+
 export function getSubscriptionPlans(): Promise<t.TSubscriptionPlan[]> {
   return request.get(endpoints.subscriptionPlans());
 }
@@ -133,6 +143,12 @@ export function createSubscriptionOrder(
 
 export function getSubscriptionOrder(orderId: string): Promise<t.TSubscriptionOrder> {
   return request.get(endpoints.subscriptionOrder(orderId));
+}
+
+export function getSubscriptionAdminOrders(
+  params: t.TSubscriptionAdminOrdersParams = {},
+): Promise<t.TSubscriptionAdminOrdersResponse> {
+  return request.get(endpoints.subscriptionAdminOrders(params));
 }
 
 export function getSubscriptionAdminPlans(): Promise<t.TSubscriptionPlan[]> {

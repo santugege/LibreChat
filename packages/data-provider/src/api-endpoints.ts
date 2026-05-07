@@ -57,6 +57,29 @@ export const subscriptionQuotaExemptions = () => `${subscriptions()}/admin/quota
 export const subscriptionQuotaExemption = (email: string) =>
   `${subscriptionQuotaExemptions()}/${encodeURIComponent(email)}`;
 
+type AdminPageParams = {
+  limit?: number;
+  offset?: number;
+};
+
+type AdminUserSearchParams = {
+  q: string;
+  limit?: number;
+};
+
+type SubscriptionAdminOrdersParams = AdminPageParams & {
+  status?: string;
+};
+
+export const adminUsers = (params: AdminPageParams = {}) =>
+  `${BASE_URL}/api/admin/users${buildQuery(params)}`;
+
+export const adminUserSearch = (params: AdminUserSearchParams) =>
+  `${BASE_URL}/api/admin/users/search${buildQuery(params)}`;
+
+export const subscriptionAdminOrders = (params: SubscriptionAdminOrdersParams = {}) =>
+  `${subscriptions()}/admin/orders${buildQuery(params)}`;
+
 export const userPlugins = () => `${BASE_URL}/api/user/plugins`;
 
 export const deleteUser = () => `${BASE_URL}/api/user/delete`;

@@ -11,10 +11,13 @@ export enum QueryKeys {
   name = 'name', // user key name
   models = 'models',
   balance = 'balance',
+  adminUsers = 'adminUsers',
+  adminUserSearch = 'adminUserSearch',
   subscriptionPlans = 'subscriptionPlans',
   subscriptionStatus = 'subscriptionStatus',
   subscriptionOrder = 'subscriptionOrder',
   subscriptionAdminPlans = 'subscriptionAdminPlans',
+  subscriptionAdminOrders = 'subscriptionAdminOrders',
   subscriptionQuotaExemptions = 'subscriptionQuotaExemptions',
   endpoints = 'endpoints',
   presets = 'presets',

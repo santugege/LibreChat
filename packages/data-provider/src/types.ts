@@ -471,6 +471,87 @@ export type TSubscriptionOrder = TCreateSubscriptionOrderResponse & {
   completedAt?: string;
 };
 
+export type TAdminPageParams = {
+  limit?: number;
+  offset?: number;
+};
+
+export type TAdminUserListItem = {
+  id: string;
+  name: string;
+  username: string;
+  email: string;
+  avatar: string;
+  role: string;
+  provider: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type TAdminUsersResponse = {
+  users: TAdminUserListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type TAdminUserSearchParams = {
+  q: string;
+  limit?: number;
+};
+
+export type TAdminUserSearchResult = {
+  id: string;
+  name: string;
+  email: string;
+  username?: string;
+  avatarUrl?: string;
+};
+
+export type TAdminUserSearchResponse = {
+  users: TAdminUserSearchResult[];
+  total: number;
+  capped: boolean;
+};
+
+export type TSubscriptionAdminOrdersParams = TAdminPageParams & {
+  status?: TSubscriptionOrderStatus;
+};
+
+export type TSubscriptionAdminOrderUser = {
+  id: string;
+  name?: string;
+  username?: string;
+  email?: string;
+  avatar?: string;
+};
+
+export type TSubscriptionAdminOrder = {
+  id: string;
+  outTradeNo: string;
+  tradeNo?: string;
+  userId: string;
+  user?: TSubscriptionAdminOrderUser;
+  planKey: string;
+  amount: number;
+  paymentType: 'alipay' | 'wxpay';
+  status: TSubscriptionOrderStatus;
+  expiresAt: string;
+  createdAt?: string;
+  updatedAt?: string;
+  paidAt?: string;
+  completedAt?: string;
+  failedAt?: string;
+  failedReason?: string;
+};
+
+export type TSubscriptionAdminOrdersResponse = {
+  orders: TSubscriptionAdminOrder[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 export type TMessageTreeNode = object;
 
 export type TSearchMessage = object;
