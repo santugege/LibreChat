@@ -355,7 +355,7 @@ Error Message: ${error.message}`);
    * Image Editing Tool
    */
   const imageEditTool = tool(
-    async ({ prompt, image_ids, quality = 'auto', size = 'auto' }, runnableConfig) => {
+    async ({ prompt, image_ids, quality, size }, runnableConfig) => {
       if (!prompt) {
         throw new Error('Missing required field: prompt');
       }
@@ -368,14 +368,19 @@ Error Message: ${error.message}`);
         };
       }
 
+      const imageOptions = resolveImageOptions({
+        quality,
+        size,
+        fallbackOutputFormat: imageOutputType,
+      });
       const formData = new FormData();
       formData.append('model', imageModel);
       formData.append('prompt', replaceUnwantedChars(prompt));
       // TODO: `mask` support
       // TODO: more than 1 image support
       // formData.append('n', n.toString());
-      formData.append('quality', quality);
-      formData.append('size', size);
+      formData.append('quality', imageOptions.quality);
+      formData.append('size', imageOptions.size);
 
       /** @type {Record<FileSources, undefined | NodeStreamDownloader<File>>} */
       const streamMethods = {};
@@ -495,29 +500,20 @@ Error Message: ${error.message}`);
           );
         }
 
-        const base64Image = response.data.data[0].b64_json;
-        if (!base64Image) {
+        const { content, file_ids, generatedIds } = createImageArtifacts(
+          response.data.data,
+          imageOutputType,
+        );
+        if (!content.length) {
           return returnValue(
             'No image data returned from OpenAI API. There may be a problem with the API or your configuration.',
           );
         }
 
-        const content = [
-          {
-            type: ContentTypes.IMAGE_URL,
-            image_url: {
-              url: `data:image/${imageOutputType};base64,${base64Image}`,
-            },
-          },
-        ];
-
-        const file_ids = [v4()];
         const textResponse = [
           {
             type: ContentTypes.TEXT,
-            text:
-              displayMessage +
-              `\n\ngenerated_image_id: "${file_ids[0]}"\nreferenced_image_ids: ["${image_ids.join('", "')}"]`,
+            text: createGeneratedImageText(generatedIds, image_ids),
           },
         ];
         return [textResponse, { content, file_ids }];

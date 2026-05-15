@@ -316,4 +316,60 @@ describe('OpenAIImageTools', () => {
       expect.any(Object),
     );
   });
+
+  describe('edit options', () => {
+    it('applies the same quality and size environment defaults to image edits', async () => {
+      process.env.IMAGE_GEN_OAI_MODEL = 'gpt-image-2';
+      process.env.IMAGE_GEN_OAI_QUALITY = 'high';
+      process.env.IMAGE_GEN_OAI_SIZE = '1024x1024';
+      const [, imageEditTool] = createTools({
+        imageFiles: [
+          {
+            file_id: 'source-image',
+            filepath: '/tmp/source.png',
+            filename: 'source.png',
+            type: 'image/png',
+            source: 'local',
+          },
+        ],
+      });
+
+      await imageEditTool.func({
+        prompt: 'make it sharper',
+        image_ids: ['source-image'],
+      });
+
+      const formData = axios.post.mock.calls[0][1];
+      expect(formData._streams.join('\n')).toContain('gpt-image-2');
+      expect(formData._streams.join('\n')).toContain('high');
+      expect(formData._streams.join('\n')).toContain('1024x1024');
+    });
+
+    it('lets explicit edit quality and size override environment defaults', async () => {
+      process.env.IMAGE_GEN_OAI_QUALITY = 'high';
+      process.env.IMAGE_GEN_OAI_SIZE = '1024x1024';
+      const [, imageEditTool] = createTools({
+        imageFiles: [
+          {
+            file_id: 'source-image',
+            filepath: '/tmp/source.png',
+            filename: 'source.png',
+            type: 'image/png',
+            source: 'local',
+          },
+        ],
+      });
+
+      await imageEditTool.func({
+        prompt: 'make it sharper',
+        image_ids: ['source-image'],
+        quality: 'medium',
+        size: '1536x1024',
+      });
+
+      const formData = axios.post.mock.calls[0][1];
+      expect(formData._streams.join('\n')).toContain('medium');
+      expect(formData._streams.join('\n')).toContain('1536x1024');
+    });
+  });
 });
