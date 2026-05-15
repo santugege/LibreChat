@@ -219,6 +219,38 @@ describe('OpenAIImageTools', () => {
         expect.any(Object),
       );
     });
+
+    it('falls back to auto for generation when environment size is not supported', async () => {
+      process.env.IMAGE_GEN_OAI_SIZE = '512x512';
+      const generate = mockGenerate();
+      const [imageGenTool] = createTools();
+
+      await imageGenTool.func({ prompt: 'test prompt' });
+
+      expect(generate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          size: 'auto',
+        }),
+        expect.any(Object),
+      );
+    });
+
+    it('uses default output compression when compression environment value is blank', async () => {
+      process.env.IMAGE_GEN_OAI_OUTPUT_FORMAT = 'jpeg';
+      process.env.IMAGE_GEN_OAI_OUTPUT_COMPRESSION = '';
+      const generate = mockGenerate();
+      const [imageGenTool] = createTools();
+
+      await imageGenTool.func({ prompt: 'test prompt' });
+
+      expect(generate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          output_format: 'jpeg',
+          output_compression: 100,
+        }),
+        expect.any(Object),
+      );
+    });
   });
 
   it('should use "gpt-image-1.5" when IMAGE_GEN_OAI_MODEL is set to "gpt-image-1.5"', async () => {

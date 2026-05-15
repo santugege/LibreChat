@@ -46,7 +46,7 @@ function createAbortHandler() {
 
 const IMAGE_QUALITIES = new Set(['auto', 'high', 'medium', 'low']);
 const IMAGE_BACKGROUNDS = new Set(['transparent', 'opaque', 'auto']);
-const IMAGE_SIZES = new Set(['auto', '1024x1024', '1536x1024', '1024x1536', '256x256', '512x512']);
+const IMAGE_GENERATION_SIZES = new Set(['auto', '1024x1024', '1536x1024', '1024x1536']);
 const IMAGE_OUTPUT_FORMATS = new Set([
   EImageOutputType.PNG,
   EImageOutputType.WEBP,
@@ -64,7 +64,8 @@ function resolveEnumOption({ value, envValue, fallback, allowed, name }) {
 }
 
 function clampInteger(value, fallback, min, max) {
-  const parsed = Number(value ?? fallback);
+  const candidate = value === '' ? fallback : value ?? fallback;
+  const parsed = Number(candidate);
   if (!Number.isFinite(parsed)) {
     return fallback;
   }
@@ -109,7 +110,7 @@ function resolveImageOptions({
     value: size,
     envValue: process.env.IMAGE_GEN_OAI_SIZE,
     fallback: 'auto',
-    allowed: IMAGE_SIZES,
+    allowed: IMAGE_GENERATION_SIZES,
     name: 'size',
   });
 
