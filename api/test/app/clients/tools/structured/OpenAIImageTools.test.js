@@ -371,5 +371,28 @@ describe('OpenAIImageTools', () => {
       expect(formData._streams.join('\n')).toContain('medium');
       expect(formData._streams.join('\n')).toContain('1536x1024');
     });
+
+    it('allows explicit edit-only sizes', async () => {
+      const [, imageEditTool] = createTools({
+        imageFiles: [
+          {
+            file_id: 'source-image',
+            filepath: '/tmp/source.png',
+            filename: 'source.png',
+            type: 'image/png',
+            source: 'local',
+          },
+        ],
+      });
+
+      await imageEditTool.func({
+        prompt: 'make it sharper',
+        image_ids: ['source-image'],
+        size: '512x512',
+      });
+
+      const formData = axios.post.mock.calls[0][1];
+      expect(formData._streams.join('\n')).toContain('512x512');
+    });
   });
 });

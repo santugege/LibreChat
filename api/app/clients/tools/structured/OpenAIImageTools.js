@@ -47,6 +47,7 @@ function createAbortHandler() {
 const IMAGE_QUALITIES = new Set(['auto', 'high', 'medium', 'low']);
 const IMAGE_BACKGROUNDS = new Set(['transparent', 'opaque', 'auto']);
 const IMAGE_GENERATION_SIZES = new Set(['auto', '1024x1024', '1536x1024', '1024x1536']);
+const IMAGE_EDIT_SIZES = new Set([...IMAGE_GENERATION_SIZES, '256x256', '512x512']);
 const IMAGE_OUTPUT_FORMATS = new Set([
   EImageOutputType.PNG,
   EImageOutputType.WEBP,
@@ -91,6 +92,7 @@ function resolveImageOptions({
   quality,
   size,
   fallbackOutputFormat,
+  allowedSizes = IMAGE_GENERATION_SIZES,
 }) {
   const resolvedBackground = resolveEnumOption({
     value: background,
@@ -110,7 +112,7 @@ function resolveImageOptions({
     value: size,
     envValue: process.env.IMAGE_GEN_OAI_SIZE,
     fallback: 'auto',
-    allowed: IMAGE_GENERATION_SIZES,
+    allowed: allowedSizes,
     name: 'size',
   });
 
@@ -372,6 +374,7 @@ Error Message: ${error.message}`);
         quality,
         size,
         fallbackOutputFormat: imageOutputType,
+        allowedSizes: IMAGE_EDIT_SIZES,
       });
       const formData = new FormData();
       formData.append('model', imageModel);
