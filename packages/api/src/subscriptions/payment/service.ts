@@ -157,7 +157,7 @@ export type CreateZPayOrderResult = {
 };
 
 type ZPayCreateResponse = {
-  code: number;
+  code: number | 'error';
   msg?: string;
   trade_no?: string;
   payurl?: string;
@@ -269,6 +269,14 @@ function getResponseCode(value: unknown): number | null {
   return null;
 }
 
+function getZPayCreateResponseCode(value: unknown): ZPayCreateResponse['code'] | null {
+  if (value === 'error') {
+    return value;
+  }
+
+  return getResponseCode(value);
+}
+
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
 }
@@ -343,7 +351,7 @@ function parseZPayCreateResponse(text: string): ZPayCreateResponse {
     throw new Error('ZPay order creation returned invalid response');
   }
 
-  const code = getResponseCode(parsed.code);
+  const code = getZPayCreateResponseCode(parsed.code);
   if (code === null) {
     throw new Error('ZPay order creation returned invalid response');
   }

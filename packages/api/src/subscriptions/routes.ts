@@ -223,14 +223,14 @@ function getAuthenticatedUser(req: express.Request): { id: string; tenantId?: st
 
 function getCreateOrderBody(body: unknown): CreateZPayOrderInput['body'] {
   if (!isObjectRecord(body)) {
-    throw new Error('Invalid subscription order request');
+    throwInvalidSubscriptionPaymentOrderRequest();
   }
 
   const { planKey, paymentType, isMobile } = body;
   const isValidPaymentType = paymentType === 'alipay' || paymentType === 'wxpay';
 
   if (typeof planKey !== 'string' || !isValidPaymentType) {
-    throw new Error('Invalid subscription order request');
+    throwInvalidSubscriptionPaymentOrderRequest();
   }
 
   return {
@@ -499,7 +499,11 @@ function isInvalidQuotaExemptionRequest(error: unknown): boolean {
 }
 
 function isInvalidSubscriptionPaymentOrderRequest(error: unknown): boolean {
-  return error instanceof Error && error.message === invalidSubscriptionPaymentOrderRequestMessage;
+  return (
+    error instanceof Error &&
+    (error.message === invalidSubscriptionPaymentOrderRequestMessage ||
+      error.message === 'Subscription plan is not available for checkout')
+  );
 }
 
 function handleSubscriptionPlanRouteError(
@@ -713,7 +717,7 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
 
       res.status(201).json(order);
     } catch (error) {
-      next(error);
+      handleSubscriptionPaymentOrderRouteError(error, res, next);
     }
   });
 

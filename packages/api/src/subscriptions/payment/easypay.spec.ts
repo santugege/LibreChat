@@ -319,6 +319,31 @@ describe('createSubscriptionPaymentService', () => {
     expect(createdOrders).toHaveLength(0);
   });
 
+  test('returns the ZPay error message from string error responses', async () => {
+    const createdOrders: Parameters<SubscriptionPaymentDb['createSubscriptionPaymentOrder']>[0][] =
+      [];
+    mockFetch(async () => {
+      return new Response(JSON.stringify({ code: 'error', msg: '商户状态异常' }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    const db = createPaymentDb({
+      createSubscriptionPaymentOrder: async (input) => {
+        createdOrders.push(input);
+        return { _id: 'order-id-1' };
+      },
+    });
+
+    await expect(
+      createSubscriptionPaymentService(db).createOrder({
+        user: { id: 'user-1' },
+        body: { planKey: 'pro', paymentType: 'alipay' },
+      }),
+    ).rejects.toThrow('商户状态异常');
+
+    expect(createdOrders).toHaveLength(0);
+  });
+
   test('rejects successful ZPay order responses without a payment URL or QR code', async () => {
     const createdOrders: Parameters<SubscriptionPaymentDb['createSubscriptionPaymentOrder']>[0][] =
       [];

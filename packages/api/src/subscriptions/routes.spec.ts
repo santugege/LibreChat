@@ -321,6 +321,64 @@ describe('createSubscriptionRouter', () => {
     });
   });
 
+  test('returns 400 for invalid payment order requests', async () => {
+    const app = createApp({
+      db: createDb(),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'user-1' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService: () => ({
+        createOrder: async () => {
+          throw new Error('should not create order');
+        },
+        handleZPayNotify: async () => {
+          throw new Error('should not handle notify');
+        },
+      }),
+    });
+
+    const response = await requestApp(app, '/api/subscriptions/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planKey: 'pro', paymentType: 'paypal' }),
+    });
+    const body = await readJson<{ message: string }>(response);
+
+    expect(response.status).toBe(400);
+    expect(body).toEqual({ message: 'Invalid subscription payment order request' });
+  });
+
+  test('returns 400 when a payment order plan is not available for checkout', async () => {
+    const app = createApp({
+      db: createDb(),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'user-1' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService: () => ({
+        createOrder: async () => {
+          throw new Error('Subscription plan is not available for checkout');
+        },
+        handleZPayNotify: async () => {
+          throw new Error('should not handle notify');
+        },
+      }),
+    });
+
+    const response = await requestApp(app, '/api/subscriptions/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planKey: 'rumen_version', paymentType: 'alipay' }),
+    });
+    const body = await readJson<{ message: string }>(response);
+
+    expect(response.status).toBe(400);
+    expect(body).toEqual({ message: 'Invalid subscription payment order request' });
+  });
+
   test('returns a user-scoped payment order', async () => {
     const orderLookups: unknown[] = [];
     const app = createApp({
