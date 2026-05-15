@@ -1,5 +1,6 @@
 const axios = require('axios');
 const OpenAI = require('openai');
+const { v4 } = require('uuid');
 const { Readable } = require('stream');
 const createOpenAIImageTools = require('~/app/clients/tools/structured/OpenAIImageTools');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
@@ -76,6 +77,10 @@ describe('OpenAIImageTools', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    v4.mockReset();
+    v4.mockReturnValueOnce('generated-file-1');
+    v4.mockReturnValueOnce('generated-file-2');
+    v4.mockReturnValue('generated-file-next');
     originalEnv = { ...process.env };
     process.env.IMAGE_GEN_OAI_API_KEY = 'test-api-key';
     delete process.env.IMAGE_GEN_OAI_MODEL;
@@ -217,6 +222,35 @@ describe('OpenAIImageTools', () => {
           output_compression: 0,
         }),
         expect.any(Object),
+      );
+    });
+
+    it('returns multiple image artifacts and generated image IDs', async () => {
+      mockGenerate([{ b64_json: 'first-image' }, { b64_json: 'second-image' }]);
+      const [imageGenTool] = createTools();
+
+      const [response, artifact] = await imageGenTool.func({
+        prompt: 'test prompt',
+        n: 2,
+      });
+
+      expect(artifact.file_ids).toEqual(['generated-file-1', 'generated-file-2']);
+      expect(artifact.content).toEqual([
+        {
+          type: 'image_url',
+          image_url: {
+            url: 'data:image/png;base64,first-image',
+          },
+        },
+        {
+          type: 'image_url',
+          image_url: {
+            url: 'data:image/png;base64,second-image',
+          },
+        },
+      ]);
+      expect(response[0].text).toContain(
+        'generated_image_ids: ["generated-file-1", "generated-file-2"]',
       );
     });
 
