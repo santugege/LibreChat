@@ -1,7 +1,18 @@
+const axios = require('axios');
 const OpenAI = require('openai');
+const { Readable } = require('stream');
 const createOpenAIImageTools = require('~/app/clients/tools/structured/OpenAIImageTools');
+const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 
+jest.mock('axios');
 jest.mock('openai');
+jest.mock('uuid', () => ({
+  v4: jest
+    .fn()
+    .mockReturnValueOnce('generated-file-1')
+    .mockReturnValueOnce('generated-file-2')
+    .mockReturnValue('generated-file-next'),
+}));
 jest.mock('@librechat/data-schemas', () => ({
   logger: {
     warn: jest.fn(),
@@ -35,91 +46,189 @@ jest.mock('~/models', () => ({
   getFiles: jest.fn().mockResolvedValue([]),
 }));
 
-describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
+const createReq = () => ({ user: { id: 'test-user' } });
+
+const createTools = (fields = {}) =>
+  createOpenAIImageTools({
+    isAgent: true,
+    override: false,
+    req: createReq(),
+    imageOutputType: 'png',
+    ...fields,
+  });
+
+const mockGenerate = (data = [{ b64_json: 'base64-encoded-image-data' }]) => {
+  const generate = jest.fn().mockResolvedValue({ data });
+  OpenAI.mockImplementation(() => ({
+    images: {
+      generate,
+    },
+  }));
+  return generate;
+};
+
+const mockEditRequest = (data = [{ b64_json: 'edited-base64-image-data' }]) => {
+  axios.post.mockResolvedValue({ data: { data } });
+};
+
+describe('OpenAIImageTools', () => {
   let originalEnv;
 
   beforeEach(() => {
     jest.clearAllMocks();
     originalEnv = { ...process.env };
-
     process.env.IMAGE_GEN_OAI_API_KEY = 'test-api-key';
-
-    OpenAI.mockImplementation(() => ({
-      images: {
-        generate: jest.fn().mockResolvedValue({
-          data: [
-            {
-              b64_json: 'base64-encoded-image-data',
-            },
-          ],
-        }),
-      },
-    }));
+    delete process.env.IMAGE_GEN_OAI_MODEL;
+    delete process.env.IMAGE_GEN_OAI_QUALITY;
+    delete process.env.IMAGE_GEN_OAI_SIZE;
+    delete process.env.IMAGE_GEN_OAI_BACKGROUND;
+    delete process.env.IMAGE_GEN_OAI_OUTPUT_FORMAT;
+    delete process.env.IMAGE_GEN_OAI_OUTPUT_COMPRESSION;
+    mockGenerate();
+    mockEditRequest();
+    getStrategyFunctions.mockReturnValue({
+      getDownloadStream: jest.fn().mockResolvedValue(Readable.from(Buffer.from('image'))),
+    });
   });
 
   afterEach(() => {
     process.env = originalEnv;
   });
 
-  it('should use default model "gpt-image-1" when IMAGE_GEN_OAI_MODEL is not set', async () => {
-    delete process.env.IMAGE_GEN_OAI_MODEL;
+  describe('generation options', () => {
+    it('uses default model "gpt-image-1" when IMAGE_GEN_OAI_MODEL is not set', async () => {
+      const generate = mockGenerate();
+      const [imageGenTool] = createTools();
 
-    const [imageGenTool] = createOpenAIImageTools({
-      isAgent: true,
-      override: false,
-      req: { user: { id: 'test-user' } },
+      await imageGenTool.func({ prompt: 'test prompt' });
+
+      expect(generate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'gpt-image-1',
+          quality: 'auto',
+          size: 'auto',
+          background: 'auto',
+          output_format: 'png',
+          output_compression: undefined,
+        }),
+        expect.any(Object),
+      );
     });
 
-    const mockGenerate = jest.fn().mockResolvedValue({
-      data: [
-        {
-          b64_json: 'base64-encoded-image-data',
-        },
-      ],
+    it('passes through IMAGE_GEN_OAI_MODEL=gpt-image-2 without private parameters', async () => {
+      process.env.IMAGE_GEN_OAI_MODEL = 'gpt-image-2';
+      const generate = mockGenerate();
+      const [imageGenTool] = createTools();
+
+      await imageGenTool.func({ prompt: 'test prompt' });
+
+      const request = generate.mock.calls[0][0];
+      expect(request).toEqual(
+        expect.objectContaining({
+          model: 'gpt-image-2',
+          prompt: 'test prompt',
+          n: 1,
+          background: 'auto',
+          output_format: 'png',
+          quality: 'auto',
+          size: 'auto',
+        }),
+      );
+      expect(Object.keys(request).sort()).toEqual([
+        'background',
+        'model',
+        'n',
+        'output_compression',
+        'output_format',
+        'prompt',
+        'quality',
+        'size',
+      ]);
     });
 
-    OpenAI.mockImplementation(() => ({
-      images: {
-        generate: mockGenerate,
-      },
-    }));
+    it('applies environment defaults for quality, size, background, format, and compression', async () => {
+      process.env.IMAGE_GEN_OAI_QUALITY = 'high';
+      process.env.IMAGE_GEN_OAI_SIZE = '1024x1024';
+      process.env.IMAGE_GEN_OAI_BACKGROUND = 'opaque';
+      process.env.IMAGE_GEN_OAI_OUTPUT_FORMAT = 'webp';
+      process.env.IMAGE_GEN_OAI_OUTPUT_COMPRESSION = '95';
+      const generate = mockGenerate();
+      const [imageGenTool] = createTools();
 
-    await imageGenTool.func({ prompt: 'test prompt' });
+      await imageGenTool.func({ prompt: 'test prompt' });
 
-    expect(mockGenerate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: 'gpt-image-1',
-      }),
-      expect.any(Object),
-    );
+      expect(generate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          quality: 'high',
+          size: '1024x1024',
+          background: 'opaque',
+          output_format: 'webp',
+          output_compression: 95,
+        }),
+        expect.any(Object),
+      );
+    });
+
+    it('lets explicit tool arguments override environment defaults', async () => {
+      process.env.IMAGE_GEN_OAI_QUALITY = 'high';
+      process.env.IMAGE_GEN_OAI_SIZE = '1024x1024';
+      process.env.IMAGE_GEN_OAI_BACKGROUND = 'opaque';
+      process.env.IMAGE_GEN_OAI_OUTPUT_FORMAT = 'webp';
+      process.env.IMAGE_GEN_OAI_OUTPUT_COMPRESSION = '95';
+      const generate = mockGenerate();
+      const [imageGenTool] = createTools();
+
+      await imageGenTool.func({
+        prompt: 'test prompt',
+        quality: 'low',
+        size: '1536x1024',
+        background: 'transparent',
+        output_compression: 40,
+      });
+
+      expect(generate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          quality: 'low',
+          size: '1536x1024',
+          background: 'transparent',
+          output_format: 'webp',
+          output_compression: 40,
+        }),
+        expect.any(Object),
+      );
+    });
+
+    it('clamps n and output compression', async () => {
+      process.env.IMAGE_GEN_OAI_OUTPUT_FORMAT = 'jpeg';
+      process.env.IMAGE_GEN_OAI_OUTPUT_COMPRESSION = '500';
+      const generate = mockGenerate();
+      const [imageGenTool] = createTools();
+
+      await imageGenTool.func({
+        prompt: 'test prompt',
+        n: 20,
+        output_compression: -10,
+      });
+
+      expect(generate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          n: 10,
+          output_format: 'jpeg',
+          output_compression: 0,
+        }),
+        expect.any(Object),
+      );
+    });
   });
 
   it('should use "gpt-image-1.5" when IMAGE_GEN_OAI_MODEL is set to "gpt-image-1.5"', async () => {
     process.env.IMAGE_GEN_OAI_MODEL = 'gpt-image-1.5';
-
-    const mockGenerate = jest.fn().mockResolvedValue({
-      data: [
-        {
-          b64_json: 'base64-encoded-image-data',
-        },
-      ],
-    });
-
-    OpenAI.mockImplementation(() => ({
-      images: {
-        generate: mockGenerate,
-      },
-    }));
-
-    const [imageGenTool] = createOpenAIImageTools({
-      isAgent: true,
-      override: false,
-      req: { user: { id: 'test-user' } },
-    });
+    const generate = mockGenerate();
+    const [imageGenTool] = createTools();
 
     await imageGenTool.func({ prompt: 'test prompt' });
 
-    expect(mockGenerate).toHaveBeenCalledWith(
+    expect(generate).toHaveBeenCalledWith(
       expect.objectContaining({
         model: 'gpt-image-1.5',
       }),
@@ -129,30 +238,12 @@ describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
 
   it('should use custom model name from IMAGE_GEN_OAI_MODEL environment variable', async () => {
     process.env.IMAGE_GEN_OAI_MODEL = 'custom-image-model';
-
-    const mockGenerate = jest.fn().mockResolvedValue({
-      data: [
-        {
-          b64_json: 'base64-encoded-image-data',
-        },
-      ],
-    });
-
-    OpenAI.mockImplementation(() => ({
-      images: {
-        generate: mockGenerate,
-      },
-    }));
-
-    const [imageGenTool] = createOpenAIImageTools({
-      isAgent: true,
-      override: false,
-      req: { user: { id: 'test-user' } },
-    });
+    const generate = mockGenerate();
+    const [imageGenTool] = createTools();
 
     await imageGenTool.func({ prompt: 'test prompt' });
 
-    expect(mockGenerate).toHaveBeenCalledWith(
+    expect(generate).toHaveBeenCalledWith(
       expect.objectContaining({
         model: 'custom-image-model',
       }),
