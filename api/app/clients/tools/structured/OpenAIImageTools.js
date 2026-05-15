@@ -44,6 +44,149 @@ function createAbortHandler() {
   };
 }
 
+const IMAGE_QUALITIES = new Set(['auto', 'high', 'medium', 'low']);
+const IMAGE_BACKGROUNDS = new Set(['transparent', 'opaque', 'auto']);
+const IMAGE_SIZES = new Set(['auto', '1024x1024', '1536x1024', '1024x1536', '256x256', '512x512']);
+const IMAGE_OUTPUT_FORMATS = new Set([
+  EImageOutputType.PNG,
+  EImageOutputType.WEBP,
+  EImageOutputType.JPEG,
+]);
+
+function resolveEnumOption({ value, envValue, fallback, allowed, name }) {
+  const candidate = value ?? envValue ?? fallback;
+  if (allowed.has(candidate)) {
+    return candidate;
+  }
+
+  logger.warn(`[ImageGenOAI] Invalid ${name} value "${candidate}", defaulting to "${fallback}"`);
+  return fallback;
+}
+
+function clampInteger(value, fallback, min, max) {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(min, Math.trunc(parsed)), max);
+}
+
+function resolveOutputFormat({ value, envValue, fallback }) {
+  return resolveEnumOption({
+    value,
+    envValue,
+    fallback,
+    allowed: IMAGE_OUTPUT_FORMATS,
+    name: 'output format',
+  });
+}
+
+function resolveImageOptions({
+  background,
+  n,
+  output_compression,
+  output_format,
+  quality,
+  size,
+  fallbackOutputFormat,
+}) {
+  const resolvedBackground = resolveEnumOption({
+    value: background,
+    envValue: process.env.IMAGE_GEN_OAI_BACKGROUND,
+    fallback: 'auto',
+    allowed: IMAGE_BACKGROUNDS,
+    name: 'background',
+  });
+  const resolvedQuality = resolveEnumOption({
+    value: quality,
+    envValue: process.env.IMAGE_GEN_OAI_QUALITY,
+    fallback: 'auto',
+    allowed: IMAGE_QUALITIES,
+    name: 'quality',
+  });
+  const resolvedSize = resolveEnumOption({
+    value: size,
+    envValue: process.env.IMAGE_GEN_OAI_SIZE,
+    fallback: 'auto',
+    allowed: IMAGE_SIZES,
+    name: 'size',
+  });
+
+  let resolvedOutputFormat = resolveOutputFormat({
+    value: output_format,
+    envValue: process.env.IMAGE_GEN_OAI_OUTPUT_FORMAT,
+    fallback: fallbackOutputFormat,
+  });
+  if (
+    resolvedBackground === 'transparent' &&
+    resolvedOutputFormat !== EImageOutputType.PNG &&
+    resolvedOutputFormat !== EImageOutputType.WEBP
+  ) {
+    logger.warn(
+      '[ImageGenOAI] Transparent background requires PNG or WebP format, defaulting to PNG',
+    );
+    resolvedOutputFormat = EImageOutputType.PNG;
+  }
+
+  const resolvedCompression = clampInteger(
+    output_compression,
+    clampInteger(process.env.IMAGE_GEN_OAI_OUTPUT_COMPRESSION, 100, 0, 100),
+    0,
+    100,
+  );
+
+  return {
+    background: resolvedBackground,
+    n: clampInteger(n, 1, 1, 10),
+    output_format: resolvedOutputFormat,
+    output_compression:
+      resolvedOutputFormat === EImageOutputType.WEBP ||
+      resolvedOutputFormat === EImageOutputType.JPEG
+        ? resolvedCompression
+        : undefined,
+    quality: resolvedQuality,
+    size: resolvedSize,
+  };
+}
+
+function createImageArtifacts(data, outputFormat) {
+  const content = [];
+  const file_ids = [];
+  const generatedIds = [];
+
+  for (const item of data ?? []) {
+    const base64Image = item?.b64_json;
+    if (!base64Image) {
+      continue;
+    }
+
+    const fileId = v4();
+    file_ids.push(fileId);
+    generatedIds.push(fileId);
+    content.push({
+      type: ContentTypes.IMAGE_URL,
+      image_url: {
+        url: `data:image/${outputFormat};base64,${base64Image}`,
+      },
+    });
+  }
+
+  return { content, file_ids, generatedIds };
+}
+
+function createGeneratedImageText(generatedIds, referencedIds = []) {
+  const generatedText =
+    generatedIds.length === 1
+      ? `generated_image_id: "${generatedIds[0]}"`
+      : `generated_image_ids: ["${generatedIds.join('", "')}"]`;
+  const referencedText = referencedIds.length
+    ? `\nreferenced_image_ids: ["${referencedIds.join('", "')}"]`
+    : '';
+
+  return displayMessage + `\n\n${generatedText}${referencedText}`;
+}
+
 /**
  * Creates OpenAI Image tools (generation and editing)
  * @param {Object} fields - Configuration fields
@@ -111,11 +254,12 @@ function createOpenAIImageTools(fields = {}) {
     async (
       {
         prompt,
-        background = 'auto',
-        n = 1,
-        output_compression = 100,
-        quality = 'auto',
-        size = 'auto',
+        background,
+        n,
+        output_compression,
+        output_format,
+        quality,
+        size,
       },
       runnableConfig,
     ) => {
@@ -132,17 +276,15 @@ function createOpenAIImageTools(fields = {}) {
 
       /** @type {OpenAI} */
       const openai = new OpenAI(clientConfig);
-      let output_format = imageOutputType;
-      if (
-        background === 'transparent' &&
-        output_format !== EImageOutputType.PNG &&
-        output_format !== EImageOutputType.WEBP
-      ) {
-        logger.warn(
-          '[ImageGenOAI] Transparent background requires PNG or WebP format, defaulting to PNG',
-        );
-        output_format = EImageOutputType.PNG;
-      }
+      const imageOptions = resolveImageOptions({
+        background,
+        n,
+        output_compression,
+        output_format,
+        quality,
+        size,
+        fallbackOutputFormat: imageOutputType,
+      });
 
       let resp;
       /** @type {AbortSignal} */
@@ -161,15 +303,7 @@ function createOpenAIImageTools(fields = {}) {
           {
             model: imageModel,
             prompt: replaceUnwantedChars(prompt),
-            n: Math.min(Math.max(1, n), 10),
-            background,
-            output_format,
-            output_compression:
-              output_format === EImageOutputType.WEBP || output_format === EImageOutputType.JPEG
-                ? output_compression
-                : undefined,
-            quality,
-            size,
+            ...imageOptions,
           },
           {
             signal: derivedSignal,
@@ -194,28 +328,21 @@ Error Message: ${error.message}`);
 
       // For gpt-image-1, the response contains base64-encoded images
       // TODO: handle cost in `resp.usage`
-      const base64Image = resp.data[0].b64_json;
+      const { content, file_ids, generatedIds } = createImageArtifacts(
+        resp.data,
+        imageOptions.output_format,
+      );
 
-      if (!base64Image) {
+      if (!content.length) {
         return returnValue(
           'No image data returned from OpenAI API. There may be a problem with the API or your configuration.',
         );
       }
 
-      const content = [
-        {
-          type: ContentTypes.IMAGE_URL,
-          image_url: {
-            url: `data:image/${output_format};base64,${base64Image}`,
-          },
-        },
-      ];
-
-      const file_ids = [v4()];
       const response = [
         {
           type: ContentTypes.TEXT,
-          text: displayMessage + `\n\ngenerated_image_id: "${file_ids[0]}"`,
+          text: createGeneratedImageText(generatedIds),
         },
       ];
       return [response, { content, file_ids }];
