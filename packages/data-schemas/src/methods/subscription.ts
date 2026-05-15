@@ -80,6 +80,7 @@ export type CreateSubscriptionPaymentOrderInput = {
   status?: SubscriptionOrderStatus;
   payUrl?: string;
   qrCode?: string;
+  qrImageUrl?: string;
   expiresAt: Date;
   tenantId?: string;
 };
@@ -515,8 +516,7 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
     tenantId?: string,
   ): Promise<ISubscriptionUsageBucket | null> {
     return await runAsSystem(async () => {
-      const Bucket = mongoose.models
-        .SubscriptionUsageBucket as Model<ISubscriptionUsageBucket>;
+      const Bucket = mongoose.models.SubscriptionUsageBucket as Model<ISubscriptionUsageBucket>;
       const user = toObjectId(userInput);
 
       return (await Bucket.findOne({
@@ -764,6 +764,7 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
         status: input.status ?? 'pending',
         ...(input.payUrl ? { payUrl: input.payUrl } : {}),
         ...(input.qrCode ? { qrCode: input.qrCode } : {}),
+        ...(input.qrImageUrl ? { qrImageUrl: input.qrImageUrl } : {}),
         expiresAt: input.expiresAt,
         ...getTenantFilter(input.tenantId),
       });
@@ -842,6 +843,7 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
             rawNotify: 0,
             payUrl: 0,
             qrCode: 0,
+            qrImageUrl: 0,
           },
         },
       ]);

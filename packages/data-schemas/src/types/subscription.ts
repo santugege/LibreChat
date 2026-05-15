@@ -86,6 +86,7 @@ export interface ISubscriptionPaymentOrder extends Document {
   status: SubscriptionOrderStatus;
   payUrl?: string;
   qrCode?: string;
+  qrImageUrl?: string;
   rawNotify?: string;
   expiresAt: Date;
   paidAt?: Date;

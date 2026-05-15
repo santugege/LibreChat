@@ -43,6 +43,7 @@ type SubscriptionPaymentOrderView = {
   amount: number;
   payUrl?: string;
   qrCode?: string;
+  qrImageUrl?: string;
   expiresAt: Date;
   completedAt?: Date;
 };
@@ -173,8 +174,7 @@ type StringRecord = {
 
 const invalidSubscriptionPlanRequestMessage = 'Invalid subscription plan request';
 const invalidQuotaExemptionRequestMessage = 'Invalid subscription quota exemption request';
-const invalidSubscriptionPaymentOrderRequestMessage =
-  'Invalid subscription payment order request';
+const invalidSubscriptionPaymentOrderRequestMessage = 'Invalid subscription payment order request';
 const subscriptionOrderStatuses = new Set<TSubscriptionOrderStatus>([
   'pending',
   'paid',
@@ -499,9 +499,7 @@ function isInvalidQuotaExemptionRequest(error: unknown): boolean {
 }
 
 function isInvalidSubscriptionPaymentOrderRequest(error: unknown): boolean {
-  return (
-    error instanceof Error && error.message === invalidSubscriptionPaymentOrderRequestMessage
-  );
+  return error instanceof Error && error.message === invalidSubscriptionPaymentOrderRequestMessage;
 }
 
 function handleSubscriptionPlanRouteError(
@@ -617,6 +615,7 @@ function serializeOrder(order: SubscriptionPaymentOrderView) {
     status: order.status,
     ...(order.payUrl ? { payUrl: order.payUrl } : {}),
     ...(order.qrCode ? { qrCode: order.qrCode } : {}),
+    ...(order.qrImageUrl ? { qrImageUrl: order.qrImageUrl } : {}),
     expiresAt: order.expiresAt.toISOString(),
     planKey: order.planKey,
     amount: order.amount,

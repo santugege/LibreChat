@@ -55,6 +55,10 @@ const paymentOrderSchema = new Schema<ISubscriptionPaymentOrder>(
       type: String,
       default: undefined,
     },
+    qrImageUrl: {
+      type: String,
+      default: undefined,
+    },
     rawNotify: {
       type: String,
       default: undefined,

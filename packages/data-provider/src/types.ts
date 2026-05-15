@@ -462,6 +462,7 @@ export type TCreateSubscriptionOrderResponse = {
   status: TSubscriptionOrderStatus;
   payUrl?: string;
   qrCode?: string;
+  qrImageUrl?: string;
   expiresAt: string;
 };
 

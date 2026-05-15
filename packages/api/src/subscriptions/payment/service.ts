@@ -51,6 +51,7 @@ export type CreateSubscriptionPaymentOrderInput = {
   status: 'pending';
   payUrl?: string;
   qrCode?: string;
+  qrImageUrl?: string;
   expiresAt: Date;
   tenantId?: string;
 };
@@ -67,6 +68,7 @@ export type SubscriptionPaymentOrder = {
   status: SubscriptionPaymentOrderStatus;
   payUrl?: string;
   qrCode?: string;
+  qrImageUrl?: string;
   rawNotify?: string;
   expiresAt?: Date;
   paidAt?: Date;
@@ -150,6 +152,7 @@ export type CreateZPayOrderResult = {
   status: 'pending';
   payUrl?: string;
   qrCode?: string;
+  qrImageUrl?: string;
   expiresAt: string;
 };
 
@@ -160,6 +163,7 @@ type ZPayCreateResponse = {
   payurl?: string;
   payurl2?: string;
   qrcode?: string;
+  img?: string;
 };
 
 function getRequiredEnv(name: ZPayEnvName): string {
@@ -288,6 +292,7 @@ function validatePaymentInstructions(payload: ZPayCreateResponse): void {
   validatePaymentInstruction(payload.payurl);
   validatePaymentInstruction(payload.payurl2);
   validatePaymentInstruction(payload.qrcode);
+  validatePaymentInstruction(payload.img);
 }
 
 async function readBoundedResponseBody(response: Response): Promise<string> {
@@ -350,6 +355,7 @@ function parseZPayCreateResponse(text: string): ZPayCreateResponse {
     payurl: getOptionalStringField(parsed, 'payurl'),
     payurl2: getOptionalStringField(parsed, 'payurl2'),
     qrcode: getOptionalStringField(parsed, 'qrcode'),
+    img: getOptionalStringField(parsed, 'img'),
   };
 }
 
@@ -473,7 +479,7 @@ export function createSubscriptionPaymentService(db: SubscriptionPaymentDb) {
 
     validatePaymentInstructions(payload);
     const payUrl = input.body.isMobile && payload.payurl2 ? payload.payurl2 : payload.payurl;
-    if (!payUrl && !payload.qrcode) {
+    if (!payUrl && !payload.qrcode && !payload.img) {
       throw new Error('ZPay order creation response did not include payment instructions');
     }
 
@@ -489,6 +495,7 @@ export function createSubscriptionPaymentService(db: SubscriptionPaymentDb) {
       status: 'pending',
       ...(payUrl ? { payUrl } : {}),
       ...(payload.qrcode ? { qrCode: payload.qrcode } : {}),
+      ...(payload.img ? { qrImageUrl: payload.img } : {}),
       expiresAt,
     });
 
@@ -502,6 +509,7 @@ export function createSubscriptionPaymentService(db: SubscriptionPaymentDb) {
       status: 'pending',
       ...(payUrl ? { payUrl } : {}),
       ...(payload.qrcode ? { qrCode: payload.qrcode } : {}),
+      ...(payload.img ? { qrImageUrl: payload.img } : {}),
       expiresAt: expiresAt.toISOString(),
     };
   }

@@ -20,6 +20,7 @@ type PaymentType = TCreateSubscriptionOrderRequest['paymentType'];
 type PaymentInstructions = {
   url: string;
   qrCode?: string;
+  qrImageUrl?: string;
 };
 
 type SubscriptionPlansDialogProps = {
@@ -53,9 +54,10 @@ function SubscriptionPlansDialog({ open, onOpenChange }: SubscriptionPlansDialog
   useRefreshSubscriptionStatusOnCompletedOrder(order);
 
   const paymentQrCode = order?.qrCode ?? paymentInstructions?.qrCode ?? '';
+  const paymentQrImageUrl = order?.qrImageUrl ?? paymentInstructions?.qrImageUrl ?? '';
   const paymentHref =
-    order?.qrCode ?? order?.payUrl ?? paymentInstructions?.qrCode ?? paymentInstructions?.url ?? '';
-  const showPaymentDialog = Boolean(paymentQrCode && paymentDialogOpen);
+    paymentQrCode || order?.payUrl || paymentInstructions?.url || paymentQrImageUrl || '';
+  const showPaymentDialog = Boolean((paymentQrCode || paymentQrImageUrl) && paymentDialogOpen);
 
   const handleCreateOrder = (planKey: string, paymentType: PaymentType) => {
     const paymentWindow = window.open('', '_blank');
@@ -68,20 +70,23 @@ function SubscriptionPlansDialog({ open, onOpenChange }: SubscriptionPlansDialog
       { planKey, paymentType },
       {
         onSuccess: (createdOrder) => {
-          const checkoutUrl = createdOrder.payUrl ?? createdOrder.qrCode ?? '';
+          const checkoutUrl =
+            createdOrder.payUrl ?? createdOrder.qrCode ?? createdOrder.qrImageUrl ?? '';
           const qrCode = createdOrder.qrCode ?? '';
+          const qrImageUrl = createdOrder.qrImageUrl ?? '';
 
           setOrderId(createdOrder.orderId);
           setPaymentInstructions(
             checkoutUrl
               ? {
-                  url: qrCode || checkoutUrl,
+                  url: qrCode || createdOrder.payUrl || qrImageUrl || checkoutUrl,
                   ...(qrCode ? { qrCode } : {}),
+                  ...(qrImageUrl ? { qrImageUrl } : {}),
                 }
               : null,
           );
 
-          if (qrCode) {
+          if (qrCode || qrImageUrl) {
             setPaymentDialogOpen(true);
             paymentWindow?.close();
             return;
@@ -183,12 +188,18 @@ function SubscriptionPlansDialog({ open, onOpenChange }: SubscriptionPlansDialog
               </button>
             </div>
             <div className="flex flex-col items-center gap-3">
-              <div
-                role="img"
-                aria-label={localize('com_nav_subscription_payment_qr_title')}
-                className="rounded-md bg-white p-3"
-              >
-                <QRCodeSVG value={paymentQrCode} size={220} includeMargin />
+              <div className="rounded-md bg-white p-3">
+                {paymentQrImageUrl ? (
+                  <img
+                    src={paymentQrImageUrl}
+                    alt={localize('com_nav_subscription_payment_qr_title')}
+                    className="h-[220px] w-[220px] object-contain"
+                  />
+                ) : (
+                  <div role="img" aria-label={localize('com_nav_subscription_payment_qr_title')}>
+                    <QRCodeSVG value={paymentQrCode} size={220} includeMargin />
+                  </div>
+                )}
               </div>
               <a
                 href={paymentHref}
@@ -203,7 +214,7 @@ function SubscriptionPlansDialog({ open, onOpenChange }: SubscriptionPlansDialog
         </div>
       )}
 
-      {!paymentQrCode && paymentHref && (
+      {!paymentQrCode && !paymentQrImageUrl && paymentHref && (
         <a
           href={paymentHref}
           target="_blank"

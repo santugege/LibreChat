@@ -333,6 +333,8 @@ describe('createSubscriptionRouter', () => {
             status: 'completed',
             planKey: 'pro',
             amount: 29.5,
+            payUrl: 'https://zpay.example/pay',
+            qrImageUrl: 'https://zpay.example/qrcode/order-id-1.jpg',
             expiresAt: new Date('2026-05-02T01:00:00.000Z'),
             completedAt: new Date('2026-05-02T00:00:00.000Z'),
           };
@@ -353,6 +355,8 @@ describe('createSubscriptionRouter', () => {
       status: string;
       planKey: string;
       amount: number;
+      payUrl: string;
+      qrImageUrl: string;
       expiresAt: string;
       completedAt: string;
     }>(response);
@@ -363,6 +367,8 @@ describe('createSubscriptionRouter', () => {
       orderId: 'order-id-1',
       outTradeNo: 'lc_order_1',
       status: 'completed',
+      payUrl: 'https://zpay.example/pay',
+      qrImageUrl: 'https://zpay.example/qrcode/order-id-1.jpg',
       expiresAt: '2026-05-02T01:00:00.000Z',
       planKey: 'pro',
       amount: 29.5,

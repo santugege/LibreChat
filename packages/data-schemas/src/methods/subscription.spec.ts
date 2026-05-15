@@ -84,6 +84,7 @@ type SubscriptionPaymentOrderInput = {
   status?: 'pending' | 'paid' | 'fulfilling' | 'completed' | 'expired' | 'cancelled' | 'failed';
   payUrl?: string;
   qrCode?: string;
+  qrImageUrl?: string;
   expiresAt: Date;
   tenantId?: string;
 };
@@ -799,6 +800,7 @@ describe('subscription methods', () => {
           rawNotify: 'secret-provider-payload',
           payUrl: 'https://pay.example/secret',
           qrCode: 'secret-qr',
+          qrImageUrl: 'https://pay.example/secret-qr.png',
         },
       },
     );
@@ -818,6 +820,7 @@ describe('subscription methods', () => {
     expect(orders[0]).not.toHaveProperty('rawNotify');
     expect(orders[0]).not.toHaveProperty('payUrl');
     expect(orders[0]).not.toHaveProperty('qrCode');
+    expect(orders[0]).not.toHaveProperty('qrImageUrl');
   });
 
   test('filters subscription payment orders by status and tenant', async () => {

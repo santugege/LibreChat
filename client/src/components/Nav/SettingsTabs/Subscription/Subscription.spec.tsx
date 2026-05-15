@@ -228,6 +228,50 @@ describe('Subscription settings tab', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('shows the ZPAY QR image when the order returns a QR image URL', () => {
+    const paymentWindow = {
+      location: { href: '' },
+      opener: window,
+      close: jest.fn(),
+    } as unknown as Window;
+    const mutate = jest.fn(
+      (
+        _: TCreateSubscriptionOrderRequest,
+        options: { onSuccess: (order: TCreateSubscriptionOrderResponse) => void },
+      ) => {
+        options.onSuccess({
+          orderId: 'order-1',
+          outTradeNo: 'trade-1',
+          status: 'pending',
+          payUrl: 'https://zpay.example/pay',
+          qrImageUrl: 'https://zpay.example/qrcode/order-1.jpg',
+          expiresAt: '2026-05-05T00:00:00.000Z',
+        });
+      },
+    );
+    jest.spyOn(window, 'open').mockReturnValue(paymentWindow);
+    mockUseGetStartupConfig.mockReturnValue({
+      data: { subscriptions: { enabled: true, paymentConfigured: true } },
+    });
+    mockUseCreateSubscriptionOrder.mockReturnValue({ mutate, isLoading: false });
+
+    render(<Subscription />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_nav_subscription_alipay' }));
+
+    const dialog = screen.getByRole('dialog', {
+      name: 'com_nav_subscription_payment_qr_title',
+    });
+
+    expect(
+      within(dialog).getByRole('img', { name: 'com_nav_subscription_payment_qr_title' }),
+    ).toHaveAttribute('src', 'https://zpay.example/qrcode/order-1.jpg');
+    expect(
+      within(dialog).getByRole('link', { name: 'com_nav_subscription_open_payment' }),
+    ).toHaveAttribute('href', 'https://zpay.example/pay');
+    expect(paymentWindow.close).toHaveBeenCalledTimes(1);
+  });
+
   it('opens the ZPAY payment page when no QR code is returned', () => {
     const paymentWindow = {
       location: { href: '' },

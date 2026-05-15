@@ -344,6 +344,39 @@ describe('createSubscriptionPaymentService', () => {
     expect(createdOrders).toHaveLength(0);
   });
 
+  test('creates an order with a ZPay QR image when only img is returned', async () => {
+    const createdOrders: Parameters<SubscriptionPaymentDb['createSubscriptionPaymentOrder']>[0][] =
+      [];
+    mockFetch(async () => {
+      return new Response(
+        JSON.stringify({
+          code: 1,
+          trade_no: 'zpay-trade-1',
+          img: 'https://zpay.example/qrcode/order-id-1.jpg',
+        }),
+        { headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    const db = createPaymentDb({
+      createSubscriptionPaymentOrder: async (input) => {
+        createdOrders.push(input);
+        return { _id: 'order-id-1' };
+      },
+    });
+
+    const result = await createSubscriptionPaymentService(db).createOrder({
+      user: { id: 'user-1' },
+      body: { planKey: 'pro', paymentType: 'alipay' },
+    });
+
+    expect(createdOrders[0]).toMatchObject({
+      qrImageUrl: 'https://zpay.example/qrcode/order-id-1.jpg',
+    });
+    expect(result).toMatchObject({
+      qrImageUrl: 'https://zpay.example/qrcode/order-id-1.jpg',
+    });
+  });
+
   test('rejects successful ZPay order responses with invalid payment instructions', async () => {
     const createdOrders: Parameters<SubscriptionPaymentDb['createSubscriptionPaymentOrder']>[0][] =
       [];
