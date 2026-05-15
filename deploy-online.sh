@@ -30,7 +30,12 @@ docker compose "${COMPOSE_FILES[@]}" exec -T api sh -lc '
   test "${SUBSCRIPTIONS_ENABLED:-}" = "true"
   test -n "${IMAGE_GEN_OAI_API_KEY:-}"
   test -n "${IMAGE_GEN_OAI_BASEURL:-}"
-  test -n "${IMAGE_GEN_OAI_MODEL:-}"
+  test "${IMAGE_GEN_OAI_MODEL:-}" = "gpt-image-2"
+  test "${IMAGE_GEN_OAI_QUALITY:-}" = "high"
+  test "${IMAGE_GEN_OAI_SIZE:-}" = "1024x1024"
+  test "${IMAGE_GEN_OAI_BACKGROUND:-}" = "auto"
+  test "${IMAGE_GEN_OAI_OUTPUT_FORMAT:-}" = "png"
+  test "${IMAGE_GEN_OAI_OUTPUT_COMPRESSION:-}" = "100"
 '
 
 docker compose "${COMPOSE_FILES[@]}" exec -T api sh -lc 'cd /app && npm run seed-subscriptions'
