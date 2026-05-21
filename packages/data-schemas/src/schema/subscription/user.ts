@@ -14,6 +14,37 @@ const userSubscriptionSchema = new Schema<IUserSubscription>(
       required: true,
       index: true,
     },
+    planName: {
+      type: String,
+      default: undefined,
+    },
+    planDescription: {
+      type: String,
+      default: undefined,
+    },
+    planAmount: {
+      type: Number,
+      min: 0,
+      default: undefined,
+    },
+    textDailyLimit: {
+      type: Number,
+      min: 0,
+      validate: {
+        validator: Number.isInteger,
+        message: 'textDailyLimit must be an integer',
+      },
+      default: undefined,
+    },
+    imageDailyLimit: {
+      type: Number,
+      min: 0,
+      validate: {
+        validator: Number.isInteger,
+        message: 'imageDailyLimit must be an integer',
+      },
+      default: undefined,
+    },
     status: {
       type: String,
       enum: ['active', 'expired', 'cancelled'],

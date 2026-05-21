@@ -64,6 +64,11 @@ type UserSubscriptionResult = {
   _id: mongoose.Types.ObjectId;
   user: mongoose.Types.ObjectId;
   planKey: string;
+  planName?: string;
+  planDescription?: string;
+  planAmount?: number;
+  textDailyLimit?: number;
+  imageDailyLimit?: number;
   status: 'active' | 'expired' | 'cancelled';
   startsAt: Date;
   expiresAt: Date;
@@ -100,6 +105,8 @@ type SubscriptionPaymentOrderResult = Omit<SubscriptionPaymentOrderInput, 'user'
   failedAt?: Date;
   failedReason?: string;
   tenantId?: string | null;
+  createdAt?: Date;
+  updatedAt?: Date;
 };
 
 type SubscriptionPaymentOrderListItemResult = {
@@ -146,6 +153,11 @@ type CreateOrExtendUserSubscriptionInput = {
   sourceOrderId: mongoose.Types.ObjectId;
   now?: Date;
   tenantId?: string;
+  planName?: string;
+  planDescription?: string;
+  planAmount?: number;
+  textDailyLimit?: number;
+  imageDailyLimit?: number;
 };
 
 type SubscriptionUsageBucketResult = {
@@ -214,6 +226,10 @@ type SubscriptionTestMethods = {
   findSubscriptionPaymentOrderByTradeNo: (
     outTradeNo: string,
   ) => Promise<SubscriptionPaymentOrderResult | null>;
+  getSubscriptionPaymentOrderById: (
+    orderId: string,
+    tenantId?: string,
+  ) => Promise<SubscriptionPaymentOrderResult | null>;
   listSubscriptionPaymentOrders: (input: {
     limit: number;
     offset: number;
@@ -242,6 +258,14 @@ type SubscriptionTestMethods = {
     reason: string,
     fulfillingAt: Date,
   ) => Promise<SubscriptionPaymentOrderResult | null>;
+  markSubscriptionOrderExpired: (
+    outTradeNo: string,
+  ) => Promise<SubscriptionPaymentOrderResult | null>;
+  listStuckSubscriptionPaymentOrders: (input: {
+    olderThan: Date;
+    limit: number;
+    statuses: Array<'pending' | 'paid' | 'fulfilling' | 'completed' | 'expired' | 'cancelled' | 'failed'>;
+  }) => Promise<SubscriptionPaymentOrderResult[]>;
   createOrExtendUserSubscription: (
     input: CreateOrExtendUserSubscriptionInput,
   ) => Promise<UserSubscriptionResult | null>;
@@ -976,6 +1000,109 @@ describe('subscription methods', () => {
     ).resolves.toMatchObject({ status: 'completed' });
   });
 
+  test('marks only pending subscription payment orders expired', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const expiresAt = new Date('2026-05-03T00:00:00.000Z');
+
+    await methods.createSubscriptionPaymentOrder!({
+      user,
+      outTradeNo: 'lc_expired_pending',
+      planKey: 'pro',
+      amount: 29,
+      paymentType: 'alipay',
+      expiresAt,
+    });
+    await methods.createSubscriptionPaymentOrder!({
+      user,
+      outTradeNo: 'lc_expired_paid',
+      planKey: 'pro',
+      amount: 29,
+      paymentType: 'alipay',
+      expiresAt,
+    });
+    await methods.markSubscriptionOrderPaid!('lc_expired_paid', 'zpay-paid', 'raw=paid');
+
+    const expired = await methods.markSubscriptionOrderExpired!('lc_expired_pending');
+    const paid = await methods.markSubscriptionOrderExpired!('lc_expired_paid');
+
+    expect(expired).toMatchObject({ outTradeNo: 'lc_expired_pending', status: 'expired' });
+    expect(paid).toBeNull();
+    await expect(
+      methods.findSubscriptionPaymentOrderByTradeNo!('lc_expired_paid'),
+    ).resolves.toMatchObject({ status: 'paid' });
+  });
+
+  test('lists stuck subscription payment orders older than the cutoff', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const expiresAt = new Date('2026-05-03T00:00:00.000Z');
+
+    const oldPending = await methods.createSubscriptionPaymentOrder!({
+      user,
+      outTradeNo: 'old-pending',
+      planKey: 'pro',
+      amount: 29,
+      paymentType: 'alipay',
+      status: 'pending',
+      expiresAt,
+    });
+    const oldPaid = await methods.createSubscriptionPaymentOrder!({
+      user,
+      outTradeNo: 'old-paid',
+      planKey: 'pro',
+      amount: 29,
+      paymentType: 'alipay',
+      status: 'paid',
+      expiresAt,
+    });
+    const newPending = await methods.createSubscriptionPaymentOrder!({
+      user,
+      outTradeNo: 'new-pending',
+      planKey: 'pro',
+      amount: 29,
+      paymentType: 'alipay',
+      status: 'pending',
+      expiresAt,
+    });
+    const oldCompleted = await methods.createSubscriptionPaymentOrder!({
+      user,
+      outTradeNo: 'old-completed',
+      planKey: 'pro',
+      amount: 29,
+      paymentType: 'alipay',
+      status: 'completed',
+      expiresAt,
+    });
+
+    // Mongoose marks `createdAt` immutable when `timestamps: true` is set,
+    // so model-level `updateOne($set: { createdAt })` is silently dropped.
+    // Reach through to the raw collection to backdate the documents.
+    const orderCollection = mongoose.models.SubscriptionPaymentOrder.collection;
+    await orderCollection.updateOne(
+      { _id: oldPending?._id },
+      { $set: { createdAt: new Date('2026-05-02T00:00:00.000Z') } },
+    );
+    await orderCollection.updateOne(
+      { _id: oldPaid?._id },
+      { $set: { createdAt: new Date('2026-05-02T00:01:00.000Z') } },
+    );
+    await orderCollection.updateOne(
+      { _id: newPending?._id },
+      { $set: { createdAt: new Date('2026-05-02T00:20:00.000Z') } },
+    );
+    await orderCollection.updateOne(
+      { _id: oldCompleted?._id },
+      { $set: { createdAt: new Date('2026-05-02T00:00:00.000Z') } },
+    );
+
+    const orders = await methods.listStuckSubscriptionPaymentOrders!({
+      olderThan: new Date('2026-05-02T00:15:00.000Z'),
+      limit: 10,
+      statuses: ['pending', 'paid', 'fulfilling'],
+    });
+
+    expect(orders.map((order) => order.outTradeNo)).toEqual(['old-pending', 'old-paid']);
+  });
+
   test('creates one subscription for repeated source order fulfillment', async () => {
     const user = new mongoose.Types.ObjectId().toString();
     const sourceOrderId = new mongoose.Types.ObjectId();
@@ -1008,6 +1135,55 @@ describe('subscription methods', () => {
     expect(repeated?._id.toString()).toBe(created?._id.toString());
     expect(repeated?.expiresAt.toISOString()).toBe('2026-06-01T00:00:00.000Z');
     expect(subscriptions).toHaveLength(1);
+  });
+
+  test('persists plan snapshot fields when creating and extending user subscriptions', async () => {
+    const user = new mongoose.Types.ObjectId().toString();
+    const firstSourceOrderId = new mongoose.Types.ObjectId();
+    const secondSourceOrderId = new mongoose.Types.ObjectId();
+    const now = new Date('2026-05-02T00:00:00.000Z');
+
+    const created = await methods.createOrExtendUserSubscription!({
+      user,
+      planKey: 'pro',
+      durationDays: 30,
+      sourceOrderId: firstSourceOrderId,
+      now,
+      planName: 'Pro',
+      planDescription: 'Professional plan',
+      planAmount: 29.5,
+      textDailyLimit: 200,
+      imageDailyLimit: 50,
+    });
+    const extended = await methods.createOrExtendUserSubscription!({
+      user,
+      planKey: 'team',
+      durationDays: 30,
+      sourceOrderId: secondSourceOrderId,
+      now: new Date('2026-05-03T00:00:00.000Z'),
+      planName: 'Team',
+      planDescription: 'Team plan',
+      planAmount: 99,
+      textDailyLimit: 1000,
+      imageDailyLimit: 250,
+    });
+
+    expect(created).toMatchObject({
+      planName: 'Pro',
+      planDescription: 'Professional plan',
+      planAmount: 29.5,
+      textDailyLimit: 200,
+      imageDailyLimit: 50,
+    });
+    expect(extended?._id.toString()).toBe(created?._id.toString());
+    expect(extended).toMatchObject({
+      planKey: 'team',
+      planName: 'Team',
+      planDescription: 'Team plan',
+      planAmount: 99,
+      textDailyLimit: 1000,
+      imageDailyLimit: 250,
+    });
   });
 
   test('does not extend again when an older fulfilled source order is retried', async () => {

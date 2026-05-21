@@ -257,15 +257,22 @@ describe('createQuotaService', () => {
     expect(consumeCalls).toBe(0);
   });
 
-  test('denies quota when active subscription plan is missing', async () => {
+  test('resolves a synthetic plan from an active subscription snapshot when the live plan is missing', async () => {
     const paidPlan = plan({ key: 'pro', name: 'Pro', textDailyLimit: 100, imageDailyLimit: 20 });
-    let consumeCalls = 0;
+    let receivedLimit: number | undefined;
 
     const deps: QuotaServiceDeps = {
       getPlans: async () => [paidPlan],
-      findActiveUserSubscription: async () => ({ planKey: 'missing-plan' }),
+      findActiveUserSubscription: async () => ({
+        planKey: 'missing-plan',
+        planName: 'Legacy Pro',
+        planDescription: 'Legacy paid plan',
+        planAmount: 29.5,
+        textDailyLimit: 300,
+        imageDailyLimit: 80,
+      }),
       consumeSubscriptionQuota: async (input) => {
-        consumeCalls += 1;
+        receivedLimit = input.limit;
         return {
           allowed: true,
           used: input.amount,
@@ -284,20 +291,65 @@ describe('createQuotaService', () => {
       now: new Date('2026-05-01T18:00:00.000Z'),
     });
 
-    expect(result.allowed).toBe(false);
-    if (result.allowed) {
-      throw new Error('Expected plan unavailable denial');
-    }
-    expect(result.error).toEqual({
-      type: 'subscription_plan_unavailable',
-      kind: 'image',
-      planKey: 'missing-plan',
-      reason: 'missing',
-      resetAt: '2026-05-02T16:00:00.000Z',
+    expect(result.allowed).toBe(true);
+    expect(receivedLimit).toBe(80);
+    expect(result.plan).toEqual({
+      key: 'missing-plan',
+      name: 'Legacy Pro',
+      description: 'Legacy paid plan',
+      price: 29.5,
+      durationDays: 0,
+      textDailyLimit: 300,
+      imageDailyLimit: 80,
+      enabled: true,
+      sortOrder: 0,
     });
-    expect(result.plan).toBeUndefined();
-    expect(result.usage).toBeUndefined();
-    expect(consumeCalls).toBe(0);
+  });
+
+  test('resolves a conservative synthetic plan when the active subscription snapshot lacks quota limits', async () => {
+    const deps: QuotaServiceDeps = {
+      getPlans: async () => [],
+      findActiveUserSubscription: async () => ({
+        planKey: 'deleted-plan',
+        planAmount: 49,
+      }),
+      consumeSubscriptionQuota: async (input) => ({
+        allowed: false,
+        used: 0,
+        limit: input.limit,
+        resetAt: input.windowEnd,
+      }),
+    };
+
+    const service = createQuotaService(deps, config);
+    const resolved = await service.resolvePlan(
+      'user-1',
+      new Date('2026-05-01T18:00:00.000Z'),
+    );
+    const consumed = await service.consume({
+      userId: 'user-1',
+      kind: 'text',
+      amount: 1,
+      requestId: 'request-deleted-plan',
+      now: new Date('2026-05-01T18:00:00.000Z'),
+    });
+
+    expect(resolved).toEqual({
+      key: 'deleted-plan',
+      name: 'deleted-plan',
+      price: 49,
+      durationDays: 0,
+      textDailyLimit: 0,
+      imageDailyLimit: 0,
+      enabled: true,
+      sortOrder: 0,
+    });
+    expect(consumed.allowed).toBe(false);
+    if (consumed.allowed) {
+      throw new Error('Expected quota denial');
+    }
+    expect(consumed.error.type).toBe('subscription_quota');
+    expect(consumed.error.planKey).toBe('deleted-plan');
   });
 
   test('denies quota when free database plan is disabled', async () => {

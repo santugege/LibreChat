@@ -9,11 +9,16 @@ const requireJwtAuth = require('~/server/middleware/requireJwtAuth');
 const { requireCapability } = require('~/server/middleware/roles/capabilities');
 
 const requireAdminAccess = requireCapability(SystemCapabilities.ACCESS_ADMIN);
+const subscriptionPaymentService = createSubscriptionPaymentService(db);
 
-module.exports = createSubscriptionRouter({
+const subscriptionRouter = createSubscriptionRouter({
   db,
   requireJwtAuth,
   requireAdminAccess,
   createQuotaService: (quotaDeps) => createQuotaService(quotaDeps),
-  createPaymentService: () => createSubscriptionPaymentService(db),
+  createPaymentService: () => subscriptionPaymentService,
 });
+
+subscriptionRouter.paymentService = subscriptionPaymentService;
+
+module.exports = subscriptionRouter;

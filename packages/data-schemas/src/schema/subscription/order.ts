@@ -100,5 +100,6 @@ const paymentOrderSchema = new Schema<ISubscriptionPaymentOrder>(
 paymentOrderSchema.index({ outTradeNo: 1 }, { unique: true });
 paymentOrderSchema.index({ user: 1, createdAt: -1 });
 paymentOrderSchema.index({ status: 1, expiresAt: 1 });
+paymentOrderSchema.index({ status: 1, createdAt: 1 });
 
 export default paymentOrderSchema;

@@ -28,7 +28,7 @@ export type QuotaServiceDeps = {
     user: string,
     now?: Date,
     tenantId?: string,
-  ) => Promise<{ planKey: string } | null>;
+  ) => Promise<ActiveSubscriptionPlanResolution | null>;
   consumeSubscriptionQuota: (
     input: ConsumeSubscriptionQuotaInput,
   ) => Promise<ConsumeSubscriptionQuotaResult>;
@@ -68,6 +68,15 @@ export type ConsumeQuotaResult = ConsumeQuotaAllowed | ConsumeQuotaDenied;
 
 type PlanUnavailableReason = 'missing' | 'disabled';
 
+type ActiveSubscriptionPlanResolution = {
+  planKey: string;
+  planName?: string;
+  planDescription?: string;
+  planAmount?: number;
+  textDailyLimit?: number;
+  imageDailyLimit?: number;
+};
+
 type PlanResolution =
   | {
       available: true;
@@ -103,10 +112,36 @@ function createUsage(
 
 function getPlanResolution(
   plans: SubscriptionPlanView[],
-  activeSubscription: { planKey: string } | null,
+  activeSubscription: ActiveSubscriptionPlanResolution | null,
 ): PlanResolution {
   const planKey = activeSubscription?.planKey ?? 'free';
   const plan = plans.find((value) => value.key === planKey);
+
+  if (plan?.enabled) {
+    return {
+      available: true,
+      plan,
+    };
+  }
+
+  if (activeSubscription) {
+    return {
+      available: true,
+      plan: {
+        key: planKey,
+        name: activeSubscription.planName ?? plan?.name ?? planKey,
+        ...(activeSubscription.planDescription ?? plan?.description
+          ? { description: activeSubscription.planDescription ?? plan?.description }
+        : {}),
+        price: activeSubscription.planAmount ?? plan?.price ?? 0,
+        durationDays: 0,
+        textDailyLimit: activeSubscription.textDailyLimit ?? plan?.textDailyLimit ?? 0,
+        imageDailyLimit: activeSubscription.imageDailyLimit ?? plan?.imageDailyLimit ?? 0,
+        enabled: true,
+        sortOrder: 0,
+      },
+    };
+  }
 
   if (!plan) {
     return {
@@ -116,17 +151,10 @@ function getPlanResolution(
     };
   }
 
-  if (!plan.enabled) {
-    return {
-      available: false,
-      planKey,
-      reason: 'disabled',
-    };
-  }
-
   return {
-    available: true,
-    plan,
+    available: false,
+    planKey,
+    reason: 'disabled',
   };
 }
 

@@ -125,6 +125,7 @@ function createDb(overrides: Partial<AdminSubscriptionRouteDb> = {}): AdminSubsc
     }),
     getSubscriptionUsageBucket: async () => null,
     getSubscriptionPaymentOrder: async () => null,
+    getSubscriptionPaymentOrderById: async () => null,
     listSubscriptionPlans: async () => [plan],
     createSubscriptionPlan: async () => plan,
     updateSubscriptionPlan: async () => plan,
@@ -146,6 +147,9 @@ function createPaymentService() {
     },
     handleZPayNotify: async () => {
       throw new Error('should not handle notify');
+    },
+    reconcileOrder: async () => {
+      throw new Error('should not reconcile order');
     },
   };
 }
@@ -434,6 +438,100 @@ describe('createSubscriptionRouter', () => {
     });
   });
 
+  test('reconciles an old pending user payment order before returning it', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-05-02T00:01:00.000Z'));
+    const reconcileOrder = jest.fn().mockResolvedValue({ status: 'completed', changed: true });
+    const orderLookups: unknown[] = [];
+    const app = createApp({
+      db: createDb({
+        getSubscriptionPaymentOrder: async (...args: unknown[]) => {
+          orderLookups.push(args);
+          return {
+            _id: { toString: () => 'order-id-1' },
+            outTradeNo: 'lc_order_1',
+            status: orderLookups.length === 1 ? 'pending' : 'completed',
+            planKey: 'pro',
+            amount: 29.5,
+            expiresAt: new Date('2026-05-02T01:00:00.000Z'),
+            createdAt: new Date('2026-05-02T00:00:00.000Z'),
+          };
+        },
+      }),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'user-1', tenantId: 'tenant-a' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService: () => ({
+        createOrder: async () => {
+          throw new Error('should not create order');
+        },
+        handleZPayNotify: async () => {
+          throw new Error('should not handle notify');
+        },
+        reconcileOrder,
+      }),
+    });
+
+    try {
+      const response = await requestApp(app, '/api/subscriptions/orders/order-id-1');
+      const body = await readJson<{ status: string }>(response);
+
+      expect(response.status).toBe(200);
+      expect(body.status).toBe('completed');
+      expect(orderLookups).toEqual([
+        ['order-id-1', 'user-1', 'tenant-a'],
+        ['order-id-1', 'user-1', 'tenant-a'],
+      ]);
+      expect(reconcileOrder).toHaveBeenCalledWith('lc_order_1', { user: 'user-1' });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('does not reconcile a fresh pending user payment order', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-05-02T00:00:10.000Z'));
+    const reconcileOrder = jest.fn();
+    const app = createApp({
+      db: createDb({
+        getSubscriptionPaymentOrder: async () => ({
+          _id: { toString: () => 'order-id-1' },
+          outTradeNo: 'lc_order_1',
+          status: 'pending',
+          planKey: 'pro',
+          amount: 29.5,
+          expiresAt: new Date('2026-05-02T01:00:00.000Z'),
+          createdAt: new Date('2026-05-02T00:00:00.000Z'),
+        }),
+      }),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'user-1', tenantId: 'tenant-a' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService: () => ({
+        createOrder: async () => {
+          throw new Error('should not create order');
+        },
+        handleZPayNotify: async () => {
+          throw new Error('should not handle notify');
+        },
+        reconcileOrder,
+      }),
+    });
+
+    try {
+      const response = await requestApp(app, '/api/subscriptions/orders/order-id-1');
+      const body = await readJson<{ status: string }>(response);
+
+      expect(response.status).toBe(200);
+      expect(body.status).toBe('pending');
+      expect(reconcileOrder).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   test('handles ZPay webhooks without JWT auth', async () => {
     const rawBodies: string[] = [];
     const app = createApp({
@@ -663,6 +761,49 @@ describe('createSubscriptionRouter', () => {
       status: 'completed',
       tenantId: 'tenant-a',
     });
+  });
+
+  test('admin reconcile endpoint reconciles a payment order and returns the latest status', async () => {
+    const reconcileOrder = jest.fn().mockResolvedValue({ status: 'completed', changed: true });
+    const app = createApp({
+      db: createDb({
+        getSubscriptionPaymentOrderById: async () => ({
+          _id: { toString: () => 'order-id-1' },
+          outTradeNo: 'lc_order_1',
+          status: 'completed',
+          planKey: 'pro',
+          amount: 29.5,
+          expiresAt: new Date('2026-05-02T01:00:00.000Z'),
+          completedAt: new Date('2026-05-02T00:03:00.000Z'),
+        }),
+      }),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'admin-1', tenantId: 'tenant-a' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService: () => ({
+        createOrder: async () => {
+          throw new Error('should not create order');
+        },
+        handleZPayNotify: async () => {
+          throw new Error('should not handle notify');
+        },
+        reconcileOrder,
+      }),
+    });
+
+    const response = await requestApp(app, '/api/subscriptions/admin/orders/order-id-1/reconcile', {
+      method: 'POST',
+    });
+    const body = await readJson<{ status: string; orderId: string }>(response);
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      orderId: 'order-id-1',
+      status: 'completed',
+    });
+    expect(reconcileOrder).toHaveBeenCalledWith('lc_order_1');
   });
 
   test('rejects invalid admin payment order status', async () => {

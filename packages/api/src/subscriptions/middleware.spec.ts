@@ -28,7 +28,14 @@ type TextQuotaDb = {
     user: string,
     now?: Date,
     tenantId?: string,
-  ) => Promise<{ planKey: string } | null>;
+  ) => Promise<{
+    planKey: string;
+    planName?: string;
+    planDescription?: string;
+    planAmount?: number;
+    textDailyLimit?: number;
+    imageDailyLimit?: number;
+  } | null>;
   consumeSubscriptionQuota: (
     input: ConsumeSubscriptionQuotaInput,
   ) => Promise<ConsumeSubscriptionQuotaResult>;

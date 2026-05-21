@@ -1,12 +1,13 @@
 import { randomUUID } from 'crypto';
 
 import type { EasyPayParams } from './easypay';
-import { signEasyPay, verifyEasyPayNotify } from './easypay';
+import { queryEasyPayOrder, signEasyPay, verifyEasyPayNotify } from './easypay';
 
 const ORDER_TTL_MS = 30 * 60 * 1000;
 const AMOUNT_TOLERANCE = 0.001;
 const ZPAY_FETCH_TIMEOUT_MS = 10 * 1000;
 const ZPAY_RESPONSE_MAX_BYTES = 64 * 1024;
+const ZPAY_RECONCILE_RATE_LIMIT_MS = 30 * 1000;
 
 type ZPayEnvName =
   | 'ZPAY_API_BASE'
@@ -77,6 +78,8 @@ export type SubscriptionPaymentOrder = {
   failedAt?: Date;
   failedReason?: string;
   tenantId?: string | null;
+  createdAt?: Date;
+  updatedAt?: Date;
 };
 
 export type CreateOrExtendUserSubscriptionInput = {
@@ -85,6 +88,11 @@ export type CreateOrExtendUserSubscriptionInput = {
   durationDays: number;
   sourceOrderId: SubscriptionPaymentObjectId;
   tenantId?: string;
+  planName?: string;
+  planDescription?: string;
+  planAmount?: number;
+  textDailyLimit?: number;
+  imageDailyLimit?: number;
 };
 
 export type SubscriptionPaymentUserSubscription = {
@@ -128,6 +136,7 @@ export type SubscriptionPaymentDb = {
     reason: string,
     fulfillingAt: Date,
   ) => Promise<SubscriptionPaymentOrder | null>;
+  markSubscriptionOrderExpired: (outTradeNo: string) => Promise<SubscriptionPaymentOrder | null>;
   createOrExtendUserSubscription: (
     input: CreateOrExtendUserSubscriptionInput,
   ) => Promise<SubscriptionPaymentUserSubscription | null>;
@@ -154,6 +163,24 @@ export type CreateZPayOrderResult = {
   qrCode?: string;
   qrImageUrl?: string;
   expiresAt: string;
+};
+
+export type ReconcileSubscriptionPaymentOrderResult = {
+  status: SubscriptionPaymentOrderStatus;
+  changed: boolean;
+};
+
+export type ReconcileSubscriptionPaymentOrderOptions = {
+  user?: string;
+};
+
+export type SubscriptionPaymentService = {
+  createOrder: (input: CreateZPayOrderInput) => Promise<CreateZPayOrderResult>;
+  handleZPayNotify: (rawBody: string) => Promise<void>;
+  reconcileOrder: (
+    outTradeNo: string,
+    options?: ReconcileSubscriptionPaymentOrderOptions,
+  ) => Promise<ReconcileSubscriptionPaymentOrderResult>;
 };
 
 type ZPayCreateResponse = {
@@ -232,6 +259,18 @@ function appendParams(body: URLSearchParams, params: EasyPayParams): void {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isTerminalReconcileStatus(status: SubscriptionPaymentOrderStatus): boolean {
+  return status === 'completed' || status === 'cancelled' || status === 'expired';
+}
+
+function isReconcileQueryStatus(status: SubscriptionPaymentOrderStatus): boolean {
+  return status === 'pending' || status === 'paid' || status === 'fulfilling' || status === 'failed';
+}
+
+function isExpiredOrder(order: SubscriptionPaymentOrder, now = new Date()): boolean {
+  return order.expiresAt instanceof Date && order.expiresAt.getTime() <= now.getTime();
 }
 
 function isAbortError(error: unknown): boolean {
@@ -397,7 +436,9 @@ async function fetchZPayCreateResponse(
   }
 }
 
-export function createSubscriptionPaymentService(db: SubscriptionPaymentDb) {
+export function createSubscriptionPaymentService(db: SubscriptionPaymentDb): SubscriptionPaymentService {
+  const lastReconcileQueries = new Map<string, number>();
+
   async function findPlan(
     planKey: string,
     tenantId?: string,
@@ -443,6 +484,68 @@ export function createSubscriptionPaymentService(db: SubscriptionPaymentDb) {
     }
 
     return order.durationDays;
+  }
+
+  async function getFulfillmentSnapshot(
+    order: SubscriptionPaymentOrder,
+    tenantId?: string,
+  ): Promise<
+    Pick<
+      CreateOrExtendUserSubscriptionInput,
+      'planName' | 'planDescription' | 'planAmount' | 'textDailyLimit' | 'imageDailyLimit'
+    >
+  > {
+    try {
+      const plan = await getPlan(order.planKey, tenantId);
+      return {
+        planName: plan.name,
+        ...(plan.description ? { planDescription: plan.description } : {}),
+        planAmount: plan.price,
+        textDailyLimit: plan.textDailyLimit,
+        imageDailyLimit: plan.imageDailyLimit,
+      };
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        error.message !== 'Subscription plan is not available'
+      ) {
+        throw error;
+      }
+
+      if (order.durationDays === undefined) {
+        throw error;
+      }
+
+      return {
+        planAmount: order.amount,
+      };
+    }
+  }
+
+  function createSyntheticNotifyBody(
+    order: SubscriptionPaymentOrder,
+    tradeNo: string,
+    pid: string,
+    pkey: string,
+  ): string {
+    const params: EasyPayParams = {
+      pid,
+      trade_no: tradeNo,
+      out_trade_no: order.outTradeNo,
+      money: formatAmount(order.amount),
+      trade_status: 'TRADE_SUCCESS',
+    };
+    const sign = signEasyPay(params, pkey);
+
+    return new URLSearchParams({
+      pid,
+      trade_no: tradeNo,
+      out_trade_no: order.outTradeNo,
+      money: formatAmount(order.amount),
+      trade_status: 'TRADE_SUCCESS',
+      sign,
+      sign_type: 'MD5',
+    }).toString();
   }
 
   async function createOrder(input: CreateZPayOrderInput): Promise<CreateZPayOrderResult> {
@@ -557,6 +660,7 @@ export function createSubscriptionPaymentService(db: SubscriptionPaymentDb) {
         planKey: order.planKey,
         durationDays,
         sourceOrderId: order._id,
+        ...(await getFulfillmentSnapshot(order, tenantId)),
         ...(tenantId !== undefined ? { tenantId } : {}),
       });
       if (!subscription) {
@@ -579,8 +683,71 @@ export function createSubscriptionPaymentService(db: SubscriptionPaymentDb) {
     }
   }
 
+  async function reconcileOrder(
+    outTradeNo: string,
+    options: ReconcileSubscriptionPaymentOrderOptions = {},
+  ): Promise<ReconcileSubscriptionPaymentOrderResult> {
+    const order = await db.findSubscriptionPaymentOrderByTradeNo(outTradeNo);
+
+    if (!order) {
+      throw new Error('Subscription payment order was not found');
+    }
+
+    if (options.user !== undefined && getOrderId(order.user) !== options.user) {
+      throw new Error('Subscription payment order was not found');
+    }
+
+    if (order.status === 'completed') {
+      return { status: 'completed', changed: false };
+    }
+
+    if (isTerminalReconcileStatus(order.status) || !isReconcileQueryStatus(order.status)) {
+      return { status: order.status, changed: false };
+    }
+
+    const now = Date.now();
+    const lastQueriedAt = lastReconcileQueries.get(outTradeNo);
+    if (lastQueriedAt !== undefined && now - lastQueriedAt < ZPAY_RECONCILE_RATE_LIMIT_MS) {
+      return { status: order.status, changed: false };
+    }
+
+    lastReconcileQueries.set(outTradeNo, now);
+
+    const apiBase = normalizeZPayApiBase(getRequiredEnv('ZPAY_API_BASE'));
+    const pid = getRequiredEnv('ZPAY_PID');
+    const pkey = getRequiredEnv('ZPAY_PKEY');
+    const query = await queryEasyPayOrder({
+      apiBase,
+      pid,
+      pkey,
+      outTradeNo,
+    });
+
+    if (query.paid) {
+      await handleZPayNotify(
+        createSyntheticNotifyBody(order, query.tradeNo ?? order.tradeNo ?? outTradeNo, pid, pkey),
+      );
+      const latest = await db.findSubscriptionPaymentOrderByTradeNo(outTradeNo);
+      return {
+        status: latest?.status ?? 'completed',
+        changed: latest ? latest.status !== order.status : true,
+      };
+    }
+
+    if (isExpiredOrder(order)) {
+      const expired = await db.markSubscriptionOrderExpired(outTradeNo);
+      return {
+        status: expired?.status ?? order.status,
+        changed: expired !== null,
+      };
+    }
+
+    return { status: order.status, changed: false };
+  }
+
   return {
     createOrder,
     handleZPayNotify,
+    reconcileOrder,
   };
 }

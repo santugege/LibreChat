@@ -1,5 +1,8 @@
 import { createHash, timingSafeEqual } from 'crypto';
 
+const EASYPAY_FETCH_TIMEOUT_MS = 10 * 1000;
+const EASYPAY_RESPONSE_MAX_BYTES = 64 * 1024;
+
 export type EasyPayParams = {
   [key: string]: string | undefined;
 };
@@ -11,6 +14,20 @@ export type EasyPayNotify = {
   amount: number;
   success: boolean;
   rawBody: string;
+};
+
+export type QueryEasyPayOrderInput = {
+  apiBase: string;
+  pid: string;
+  pkey: string;
+  outTradeNo: string;
+};
+
+export type QueryEasyPayOrderResult = {
+  paid: boolean;
+  tradeNo?: string;
+  amount?: number;
+  raw: string;
 };
 
 function isSignableValue(value: string | undefined): value is string {
@@ -26,6 +43,168 @@ function signaturesMatch(expected: string, actual: string): boolean {
   }
 
   return timingSafeEqual(expectedBuffer, actualBuffer);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function isObjectRecord(value: unknown): value is { [key: string]: unknown } {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeApiBase(apiBase: string): string {
+  return apiBase.trim().replace(/\/+$/, '');
+}
+
+function getResponseCode(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function getOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
+function getOptionalAmount(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  return undefined;
+}
+
+function isPaidStatus(value: unknown): boolean {
+  if (value === 1) {
+    return true;
+  }
+
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  const normalized = value.trim().toUpperCase();
+  return normalized === '1' || normalized === 'TRADE_SUCCESS' || normalized === 'TRADE_FINISHED';
+}
+
+async function readBoundedResponseBody(response: Response): Promise<string> {
+  if (!response.body) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > EASYPAY_RESPONSE_MAX_BYTES) {
+      throw new Error('ZPay order query response too large');
+    }
+
+    return text;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let bytes = 0;
+
+  while (true) {
+    const result = await reader.read();
+
+    if (result.done) {
+      break;
+    }
+
+    bytes += result.value.byteLength;
+    if (bytes > EASYPAY_RESPONSE_MAX_BYTES) {
+      await reader.cancel();
+      throw new Error('ZPay order query response too large');
+    }
+
+    chunks.push(decoder.decode(result.value, { stream: true }));
+  }
+
+  chunks.push(decoder.decode());
+  return chunks.join('');
+}
+
+function parseEasyPayOrderQuery(text: string): QueryEasyPayOrderResult {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('ZPay order query returned invalid JSON');
+  }
+
+  if (!isObjectRecord(parsed)) {
+    throw new Error('ZPay order query returned invalid response');
+  }
+
+  const code = getResponseCode(parsed.code);
+  if (code === null) {
+    throw new Error('ZPay order query returned invalid response');
+  }
+
+  if (code !== 1) {
+    throw new Error(getOptionalString(parsed.msg) ?? 'ZPay order query failed');
+  }
+
+  const tradeNo = getOptionalString(parsed.trade_no);
+  const amount = getOptionalAmount(parsed.money);
+
+  return {
+    paid: isPaidStatus(parsed.status),
+    ...(tradeNo ? { tradeNo } : {}),
+    ...(amount !== undefined ? { amount } : {}),
+    raw: text,
+  };
+}
+
+export async function queryEasyPayOrder(
+  input: QueryEasyPayOrderInput,
+): Promise<QueryEasyPayOrderResult> {
+  const url = new URL(`${normalizeApiBase(input.apiBase)}/api.php`);
+  url.searchParams.set('act', 'order');
+  url.searchParams.set('pid', input.pid);
+  url.searchParams.set('key', input.pkey);
+  url.searchParams.set('out_trade_no', input.outTradeNo);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), EASYPAY_FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`ZPay order query failed with HTTP ${response.status}`);
+    }
+
+    return parseEasyPayOrderQuery(await readBoundedResponseBody(response));
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error('ZPay order query timed out');
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function signEasyPay(params: EasyPayParams, pkey: string): string {

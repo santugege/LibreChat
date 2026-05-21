@@ -1,5 +1,5 @@
 import type { SubscriptionPaymentDb } from './service';
-import { signEasyPay, verifyEasyPayNotify } from './easypay';
+import { queryEasyPayOrder, signEasyPay, verifyEasyPayNotify } from './easypay';
 import { createSubscriptionPaymentService } from './service';
 
 describe('EasyPay ZPay helpers', () => {
@@ -167,6 +167,7 @@ function createPaymentDb(overrides: Partial<SubscriptionPaymentDb> = {}): Subscr
     markSubscriptionOrderFulfilling: async () => null,
     markSubscriptionOrderCompleted: async () => null,
     markSubscriptionOrderFailed: async () => null,
+    markSubscriptionOrderExpired: async () => null,
     createOrExtendUserSubscription: async () => null,
     ...overrides,
   };
@@ -187,6 +188,102 @@ function mockFetch(
   global.fetch = fetchMock;
   return fetchMock;
 }
+
+describe('queryEasyPayOrder', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  test('parses a paid ZPay order query response', async () => {
+    const fetchMock = mockFetch(async () => {
+      return new Response(
+        JSON.stringify({
+          code: 1,
+          status: 1,
+          trade_no: 'zpay-trade-1',
+          money: '29.50',
+        }),
+        { headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+
+    const result = await queryEasyPayOrder({
+      apiBase: 'https://zpay.example/',
+      pid: '1000',
+      pkey: 'secret',
+      outTradeNo: 'lc_order_1',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://zpay.example/api.php?act=order&pid=1000&key=secret&out_trade_no=lc_order_1',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(result).toEqual({
+      paid: true,
+      tradeNo: 'zpay-trade-1',
+      amount: 29.5,
+      raw: JSON.stringify({
+        code: 1,
+        status: 1,
+        trade_no: 'zpay-trade-1',
+        money: '29.50',
+      }),
+    });
+  });
+
+  test('parses an unpaid ZPay order query response', async () => {
+    mockFetch(async () => {
+      return new Response(
+        JSON.stringify({
+          code: 1,
+          status: 0,
+          trade_no: 'zpay-trade-1',
+          money: '29.50',
+        }),
+        { headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+
+    await expect(
+      queryEasyPayOrder({
+        apiBase: 'https://zpay.example',
+        pid: '1000',
+        pkey: 'secret',
+        outTradeNo: 'lc_order_unpaid',
+      }),
+    ).resolves.toEqual({
+      paid: false,
+      tradeNo: 'zpay-trade-1',
+      amount: 29.5,
+      raw: JSON.stringify({
+        code: 1,
+        status: 0,
+        trade_no: 'zpay-trade-1',
+        money: '29.50',
+      }),
+    });
+  });
+
+  test('rejects ZPay order query error responses', async () => {
+    mockFetch(async () => {
+      return new Response(JSON.stringify({ code: -1, msg: 'order not found' }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    await expect(
+      queryEasyPayOrder({
+        apiBase: 'https://zpay.example',
+        pid: '1000',
+        pkey: 'secret',
+        outTradeNo: 'missing-order',
+      }),
+    ).rejects.toThrow('order not found');
+  });
+});
 
 describe('createSubscriptionPaymentService', () => {
   const originalFetch = global.fetch;
@@ -235,6 +332,7 @@ describe('createSubscriptionPaymentService', () => {
       markSubscriptionOrderFulfilling: async () => null,
       markSubscriptionOrderCompleted: async () => null,
       markSubscriptionOrderFailed: async () => null,
+      markSubscriptionOrderExpired: async () => null,
       createOrExtendUserSubscription: async () => null,
     };
 
@@ -532,7 +630,7 @@ describe('createSubscriptionPaymentService', () => {
     expect(createdOrders[0].amount).toBe(30);
   });
 
-  test('fulfills from the paid order duration snapshot without reloading current plans', async () => {
+  test('fulfills from the paid order duration snapshot when the current plan is missing', async () => {
     const calls: string[] = [];
     let subscriptionInput: Parameters<SubscriptionPaymentDb['createOrExtendUserSubscription']>[0];
     const payload = {
@@ -556,9 +654,7 @@ describe('createSubscriptionPaymentService', () => {
       tenantId: 'tenant-a',
     };
     const db = createPaymentDb({
-      getEnabledSubscriptionPlans: async () => {
-        throw new Error('should not load current plans');
-      },
+      getEnabledSubscriptionPlans: async () => [],
       findSubscriptionPaymentOrderByTradeNo: async () => orderWithSnapshot,
       markSubscriptionOrderPaid: async () => {
         calls.push('paid');
@@ -592,6 +688,7 @@ describe('createSubscriptionPaymentService', () => {
       durationDays: 45,
       sourceOrderId: 'order-id-snapshot',
       tenantId: 'tenant-a',
+      planAmount: 29.5,
     });
   });
 
@@ -648,13 +745,24 @@ describe('createSubscriptionPaymentService', () => {
 
     await createSubscriptionPaymentService(db).handleZPayNotify(rawBody);
 
-    expect(calls).toEqual(['paid', 'fulfilling', 'plans:tenant-a', 'subscription', 'completed']);
+    expect(calls).toEqual([
+      'paid',
+      'fulfilling',
+      'plans:tenant-a',
+      'plans:tenant-a',
+      'subscription',
+      'completed',
+    ]);
     expect(subscriptionInput!).toEqual({
       user: 'user-1',
       planKey: 'pro',
       durationDays: 60,
       sourceOrderId: 'order-id-legacy',
       tenantId: 'tenant-a',
+      planName: 'Pro',
+      planAmount: 0,
+      textDailyLimit: 200,
+      imageDailyLimit: 50,
     });
   });
 
@@ -708,6 +816,7 @@ describe('createSubscriptionPaymentService', () => {
         };
       },
       markSubscriptionOrderFailed: async () => null,
+      markSubscriptionOrderExpired: async () => null,
       createOrExtendUserSubscription: async (input) => {
         subscriptionInput = input;
         calls.push('subscription');
@@ -717,13 +826,24 @@ describe('createSubscriptionPaymentService', () => {
 
     await createSubscriptionPaymentService(db).handleZPayNotify(rawBody);
 
-    expect(calls).toEqual(['paid', 'fulfilling', 'plans:tenant-a', 'subscription', 'completed']);
+    expect(calls).toEqual([
+      'paid',
+      'fulfilling',
+      'plans:tenant-a',
+      'plans:tenant-a',
+      'subscription',
+      'completed',
+    ]);
     expect(subscriptionInput!).toEqual({
       user: 'user-1',
       planKey: 'pro',
       durationDays: 30,
       sourceOrderId: 'order-id-1',
       tenantId: 'tenant-a',
+      planName: 'Pro',
+      planAmount: 29.5,
+      textDailyLimit: 200,
+      imageDailyLimit: 50,
     });
   });
 
@@ -910,6 +1030,7 @@ describe('createSubscriptionPaymentService', () => {
       },
       markSubscriptionOrderCompleted: async () => null,
       markSubscriptionOrderFailed: async () => null,
+      markSubscriptionOrderExpired: async () => null,
       createOrExtendUserSubscription: async () => null,
     };
 

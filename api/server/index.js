@@ -22,6 +22,8 @@ const {
   createStreamServices,
   initializeFileStorage,
   preAuthTenantMiddleware,
+  createSubscriptionPaymentService,
+  startSubscriptionOrderReconciliation,
   setupGracefulShutdown,
   updateInterfacePermissions,
 } = require('@librechat/api');
@@ -55,6 +57,12 @@ const trusted_proxy = Number(TRUST_PROXY) || 1; /* trust first proxy by default 
 
 const app = express();
 let serverReady = false;
+
+function hasZPayReconciliationConfig() {
+  return Boolean(
+    process.env.ZPAY_API_BASE?.trim() && process.env.ZPAY_PID?.trim() && process.env.ZPAY_PKEY?.trim(),
+  );
+}
 
 const startServer = async () => {
   const { metricsMiddleware, metricsRouter } = createMetrics();
@@ -93,6 +101,20 @@ const startServer = async () => {
   const appConfig = await getAppConfig({ baseOnly: true });
   initializeFileStorage(appConfig);
   startExpiredFileSweep({ appConfig, loadAppConfig: getAppConfig });
+  if (hasZPayReconciliationConfig()) {
+    const subscriptionDb = require('~/models');
+    const paymentService =
+      routes.subscriptions.paymentService ?? createSubscriptionPaymentService(subscriptionDb);
+    runAsSystem(async () => {
+      startSubscriptionOrderReconciliation({
+        paymentService,
+        db: subscriptionDb,
+        logger,
+      });
+    }).catch((err) => {
+      logger.error('[subscriptions] Payment order reconciliation scheduler failed:', err);
+    });
+  }
   await runAsSystem(async () => {
     await performStartupChecks(appConfig);
     await updateInterfacePermissions({ appConfig, getRoleByName, updateAccessPermissions });

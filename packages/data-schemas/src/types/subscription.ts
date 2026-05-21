@@ -33,6 +33,11 @@ export interface ISubscriptionPlan extends Document {
 export interface IUserSubscription extends Document {
   user: Types.ObjectId;
   planKey: string;
+  planName?: string;
+  planDescription?: string;
+  planAmount?: number;
+  textDailyLimit?: number;
+  imageDailyLimit?: number;
   status: SubscriptionStatus;
   startsAt: Date;
   expiresAt: Date;

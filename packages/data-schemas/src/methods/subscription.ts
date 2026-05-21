@@ -129,10 +129,21 @@ export type CreateOrExtendUserSubscriptionInput = {
   sourceOrderId: ObjectIdInput;
   now?: Date;
   tenantId?: string;
+  planName?: string;
+  planDescription?: string;
+  planAmount?: number;
+  textDailyLimit?: number;
+  imageDailyLimit?: number;
 };
 
 export type SubscriptionPaymentOrderLock = {
   fulfillingAt: Date;
+};
+
+export type ListStuckSubscriptionPaymentOrdersInput = {
+  olderThan: Date;
+  limit: number;
+  statuses: SubscriptionOrderStatus[];
 };
 
 function getTenantFilter(tenantId?: string): { tenantId: string | null } {
@@ -295,6 +306,23 @@ function getInputQuotaDimensions(input: ConsumeSubscriptionQuotaInput): QuotaEve
     windowStart: input.windowStart,
     windowEnd: input.windowEnd,
     limit: input.limit,
+  };
+}
+
+function getSubscriptionSnapshotUpdate(
+  input: CreateOrExtendUserSubscriptionInput,
+): Partial<
+  Pick<
+    IUserSubscription,
+    'planName' | 'planDescription' | 'planAmount' | 'textDailyLimit' | 'imageDailyLimit'
+  >
+> {
+  return {
+    ...(input.planName !== undefined ? { planName: input.planName } : {}),
+    ...(input.planDescription !== undefined ? { planDescription: input.planDescription } : {}),
+    ...(input.planAmount !== undefined ? { planAmount: input.planAmount } : {}),
+    ...(input.textDailyLimit !== undefined ? { textDailyLimit: input.textDailyLimit } : {}),
+    ...(input.imageDailyLimit !== undefined ? { imageDailyLimit: input.imageDailyLimit } : {}),
   };
 }
 
@@ -892,6 +920,34 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
     });
   }
 
+  async function listStuckSubscriptionPaymentOrders(
+    input: ListStuckSubscriptionPaymentOrdersInput,
+  ): Promise<ISubscriptionPaymentOrder[]> {
+    return await runAsSystem(async () => {
+      const Order = mongoose.models.SubscriptionPaymentOrder as Model<ISubscriptionPaymentOrder>;
+      return (await Order.find({
+        status: { $in: input.statuses },
+        createdAt: { $lt: input.olderThan },
+      })
+        .sort({ createdAt: 1, _id: 1 })
+        .limit(input.limit)
+        .lean()) as ISubscriptionPaymentOrder[];
+    });
+  }
+
+  async function getSubscriptionPaymentOrderById(
+    orderId: ObjectIdInput,
+    tenantId?: string,
+  ): Promise<ISubscriptionPaymentOrder | null> {
+    return await runAsSystem(async () => {
+      const Order = mongoose.models.SubscriptionPaymentOrder as Model<ISubscriptionPaymentOrder>;
+      return (await Order.findOne({
+        _id: toObjectId(orderId),
+        ...getTenantFilter(tenantId),
+      }).lean()) as ISubscriptionPaymentOrder | null;
+    });
+  }
+
   async function markSubscriptionOrderPaid(
     outTradeNo: string,
     tradeNo: string,
@@ -1004,6 +1060,26 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
     });
   }
 
+  async function markSubscriptionOrderExpired(
+    outTradeNo: string,
+  ): Promise<ISubscriptionPaymentOrder | null> {
+    return await runAsSystem(async () => {
+      const Order = mongoose.models.SubscriptionPaymentOrder as Model<ISubscriptionPaymentOrder>;
+      return (await Order.findOneAndUpdate(
+        {
+          outTradeNo,
+          status: 'pending',
+        },
+        {
+          $set: {
+            status: 'expired',
+          },
+        },
+        { new: true, runValidators: true },
+      ).lean()) as ISubscriptionPaymentOrder | null;
+    });
+  }
+
   async function createOrExtendUserSubscription(
     input: CreateOrExtendUserSubscriptionInput,
   ): Promise<IUserSubscription | null> {
@@ -1017,6 +1093,7 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
       const now = input.now ?? new Date();
       const durationMs = input.durationDays * DAY_MS;
       const fulfillmentKey = getFulfillmentKey(user, tenantFilter.tenantId);
+      const snapshotUpdate = getSubscriptionSnapshotUpdate(input);
       const findBySourceOrder = async (): Promise<IUserSubscription | null> =>
         (await UserSubscription.findOne({
           ...getFulfilledSourceOrderFilter(sourceOrderId),
@@ -1047,6 +1124,7 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
           {
             $set: {
               planKey: input.planKey,
+              ...snapshotUpdate,
               status: 'active',
               startsAt,
               expiresAt,
@@ -1095,6 +1173,7 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
             const subscription = await UserSubscription.create({
               user,
               planKey: input.planKey,
+              ...snapshotUpdate,
               status: 'active',
               startsAt: now,
               expiresAt: new Date(now.getTime() + durationMs),
@@ -1153,12 +1232,15 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
     createSubscriptionPaymentOrder,
     findSubscriptionPaymentOrderByTradeNo,
     getSubscriptionPaymentOrder,
+    getSubscriptionPaymentOrderById,
     listSubscriptionPaymentOrders,
     countSubscriptionPaymentOrders,
+    listStuckSubscriptionPaymentOrders,
     markSubscriptionOrderPaid,
     markSubscriptionOrderFulfilling,
     markSubscriptionOrderCompleted,
     markSubscriptionOrderFailed,
+    markSubscriptionOrderExpired,
     createOrExtendUserSubscription,
   };
 }

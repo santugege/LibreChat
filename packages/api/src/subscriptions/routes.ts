@@ -9,9 +9,13 @@ import type { QuotaServiceDeps } from './quota';
 import type {
   CreateZPayOrderInput,
   CreateZPayOrderResult,
+  ReconcileSubscriptionPaymentOrderOptions,
+  ReconcileSubscriptionPaymentOrderResult,
   SubscriptionPaymentObjectId,
   SubscriptionPaymentOrderStatus,
 } from './payment/service';
+import { logger } from '@librechat/data-schemas';
+import { signEasyPay } from './payment/easypay';
 import type { SubscriptionPlanView } from './types';
 import { parsePagination } from '../admin/pagination';
 import { getSubscriptionConfig } from './config';
@@ -30,6 +34,11 @@ type SubscriptionRequest = express.Request & {
 
 type ActiveSubscription = {
   planKey: string;
+  planName?: string;
+  planDescription?: string;
+  planAmount?: number;
+  textDailyLimit?: number;
+  imageDailyLimit?: number;
   status?: 'active' | 'expired' | 'cancelled';
   startsAt?: Date;
   expiresAt?: Date;
@@ -46,6 +55,7 @@ type SubscriptionPaymentOrderView = {
   qrImageUrl?: string;
   expiresAt: Date;
   completedAt?: Date;
+  createdAt?: Date;
 };
 
 type SubscriptionAdminPaymentOrderView = {
@@ -133,6 +143,10 @@ type SubscriptionRouteDb = {
     user: string,
     tenantId?: string,
   ) => Promise<SubscriptionPaymentOrderView | null>;
+  getSubscriptionPaymentOrderById: (
+    orderId: string,
+    tenantId?: string,
+  ) => Promise<SubscriptionPaymentOrderView | null>;
   listSubscriptionPaymentOrders: (
     input: ListSubscriptionPaymentOrdersInput,
   ) => Promise<SubscriptionAdminPaymentOrderView[]>;
@@ -142,6 +156,10 @@ type SubscriptionRouteDb = {
 type SubscriptionPaymentRouteService = {
   createOrder: (input: CreateZPayOrderInput) => Promise<CreateZPayOrderResult>;
   handleZPayNotify: (rawBody: string) => Promise<void>;
+  reconcileOrder: (
+    outTradeNo: string,
+    options?: ReconcileSubscriptionPaymentOrderOptions,
+  ) => Promise<ReconcileSubscriptionPaymentOrderResult>;
 };
 
 type SubscriptionStatusResponse = {
@@ -197,6 +215,12 @@ const subscriptionPlanCreateKeys = [
 ] as const;
 const subscriptionPlanPatchKeys = subscriptionPlanCreateKeys.filter((key) => key !== 'key');
 const quotaExemptionKeys = ['email'] as const;
+const reconcilePollAgeMs = 20 * 1000;
+const reconcilePollTerminalStatuses = new Set<SubscriptionPaymentOrderStatus>([
+  'completed',
+  'cancelled',
+  'expired',
+]);
 
 function isObjectRecord(value: unknown): value is { [key: string]: unknown } {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -612,6 +636,62 @@ function getRawQuery(req: express.Request): string {
   return queryStart === -1 ? '' : req.originalUrl.slice(queryStart + 1);
 }
 
+function getWebhookField(rawBody: string, key: string): string | undefined {
+  const value = new URLSearchParams(rawBody).get(key)?.trim();
+  return value ? value : undefined;
+}
+
+function getWebhookSignatureValid(rawBody: string): boolean | undefined {
+  const pkey = process.env.ZPAY_PKEY?.trim();
+
+  if (!pkey) {
+    return undefined;
+  }
+
+  const params: Record<string, string> = {};
+  new URLSearchParams(rawBody).forEach((value, key) => {
+    params[key] = value;
+  });
+
+  const sign = params.sign;
+  if (!sign) {
+    return false;
+  }
+
+  return signEasyPay(params, pkey) === sign;
+}
+
+function getWebhookLogContext(rawBody: string): {
+  outTradeNo?: string;
+  tradeNo?: string;
+  tradeStatus?: string;
+  sigValid?: boolean;
+} {
+  const sigValid = getWebhookSignatureValid(rawBody);
+  const outTradeNo = getWebhookField(rawBody, 'out_trade_no');
+  const tradeNo = getWebhookField(rawBody, 'trade_no');
+  const tradeStatus = getWebhookField(rawBody, 'trade_status');
+
+  return {
+    ...(outTradeNo ? { outTradeNo } : {}),
+    ...(tradeNo ? { tradeNo } : {}),
+    ...(tradeStatus ? { tradeStatus } : {}),
+    ...(sigValid !== undefined ? { sigValid } : {}),
+  };
+}
+
+function shouldReconcilePolledOrder(order: SubscriptionPaymentOrderView, now = new Date()): boolean {
+  if (reconcilePollTerminalStatuses.has(order.status)) {
+    return false;
+  }
+
+  if (!order.createdAt) {
+    return false;
+  }
+
+  return now.getTime() - order.createdAt.getTime() >= reconcilePollAgeMs;
+}
+
 function serializeOrder(order: SubscriptionPaymentOrderView) {
   return {
     orderId: getObjectId(order._id),
@@ -670,6 +750,7 @@ function serializeQuotaExemption(exemption: SubscriptionQuotaExemptionView) {
 export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): express.Router {
   const router = express.Router();
   const getQuotaService = deps.createQuotaService ?? createQuotaService;
+  const payment = deps.createPaymentService(deps.db);
   const quotaDeps: QuotaServiceDeps = {
     getPlans: deps.db.getEnabledSubscriptionPlans,
     findActiveUserSubscription: deps.db.findActiveUserSubscription,
@@ -708,7 +789,6 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
   router.post('/orders', deps.requireJwtAuth, async (req, res, next) => {
     try {
       const user = getAuthenticatedUser(req);
-      const payment = deps.createPaymentService(deps.db);
       const order = await payment.createOrder({
         user,
         body: getCreateOrderBody(req.body),
@@ -724,7 +804,7 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
   router.get('/orders/:orderId', deps.requireJwtAuth, async (req, res, next) => {
     try {
       const user = getAuthenticatedUser(req);
-      const order = await deps.db.getSubscriptionPaymentOrder(
+      let order = await deps.db.getSubscriptionPaymentOrder(
         req.params.orderId,
         user.id,
         user.tenantId,
@@ -733,6 +813,24 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
       if (!order) {
         res.status(404).json({ message: 'Subscription payment order not found' });
         return;
+      }
+
+      if (shouldReconcilePolledOrder(order)) {
+        try {
+          await payment.reconcileOrder(order.outTradeNo, { user: user.id });
+          order =
+            (await deps.db.getSubscriptionPaymentOrder(req.params.orderId, user.id, user.tenantId)) ??
+            order;
+        } catch (error) {
+          logger.warn('[subscriptions] ZPay order polling reconcile failed', {
+            orderId: req.params.orderId,
+            outTradeNo: order.outTradeNo,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          order =
+            (await deps.db.getSubscriptionPaymentOrder(req.params.orderId, user.id, user.tenantId)) ??
+            order;
+        }
       }
 
       res.json(serializeOrder(order));
@@ -771,6 +869,34 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
         res.json(response);
       } catch (error) {
         handleSubscriptionPaymentOrderRouteError(error, res, next);
+      }
+    },
+  );
+
+  router.post(
+    '/admin/orders/:orderId/reconcile',
+    deps.requireJwtAuth,
+    deps.requireAdminAccess,
+    async (req, res, next) => {
+      try {
+        const user = getAuthenticatedUser(req);
+        const order = await deps.db.getSubscriptionPaymentOrderById(
+          req.params.orderId,
+          user.tenantId,
+        );
+
+        if (!order) {
+          res.status(404).json({ message: 'Subscription payment order not found' });
+          return;
+        }
+
+        await payment.reconcileOrder(order.outTradeNo);
+        const updated =
+          (await deps.db.getSubscriptionPaymentOrderById(req.params.orderId, user.tenantId)) ??
+          order;
+        res.json(serializeOrder(updated));
+      } catch (error) {
+        next(error);
       }
     },
   );
@@ -913,12 +1039,18 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
   );
 
   router.get('/payment/webhook/zpay', async (req, res, next) => {
+    const rawBody = getRawQuery(req);
+    const context = getWebhookLogContext(rawBody);
+    logger.info('[subscriptions] ZPay webhook received', context);
     try {
-      const payment = deps.createPaymentService(deps.db);
-      await payment.handleZPayNotify(getRawQuery(req));
+      await payment.handleZPayNotify(rawBody);
       res.status(200).send('success');
     } catch (error) {
-      next(error);
+      logger.warn('[subscriptions] ZPay webhook processing failed', {
+        ...context,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.status(200).send('success');
     }
   });
 
@@ -926,12 +1058,18 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
     '/payment/webhook/zpay',
     express.urlencoded({ extended: false }),
     async (req, res, next) => {
+      const rawBody = createRawFormBody(req.body);
+      const context = getWebhookLogContext(rawBody);
+      logger.info('[subscriptions] ZPay webhook received', context);
       try {
-        const payment = deps.createPaymentService(deps.db);
-        await payment.handleZPayNotify(createRawFormBody(req.body));
+        await payment.handleZPayNotify(rawBody);
         res.status(200).send('success');
       } catch (error) {
-        next(error);
+        logger.warn('[subscriptions] ZPay webhook processing failed', {
+          ...context,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        res.status(200).send('success');
       }
     },
   );
