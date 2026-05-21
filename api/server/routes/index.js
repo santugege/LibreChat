@@ -14,6 +14,7 @@ const memories = require('./memories');
 const subscriptions = require('./subscriptions');
 const presets = require('./presets');
 const prompts = require('./prompts');
+const skills = require('./skills');
 const balance = require('./balance');
 const actions = require('./actions');
 const apiKeys = require('./apiKeys');
@@ -57,6 +58,7 @@ module.exports = {
   config,
   models,
   prompts,
+  skills,
   actions,
   presets,
   balance,
