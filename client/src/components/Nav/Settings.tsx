@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import { SettingsTabValues } from 'librechat-data-provider';
-import { MessageSquare, Command, DollarSign, CreditCard } from 'lucide-react';
+import { MessageSquare, Command, DollarSign, CreditCard, Info } from 'lucide-react';
 import { Dialog, DialogPanel, DialogTitle, Transition, TransitionChild } from '@headlessui/react';
 import {
   GearIcon,
@@ -22,6 +22,7 @@ import {
   Balance,
   Subscription,
   Account,
+  About,
 } from './SettingsTabs';
 import usePersonalizationAccess from '~/hooks/usePersonalizationAccess';
 import { useLocalize, TranslationKeys } from '~/hooks';
@@ -43,6 +44,13 @@ export default function Settings({
   const [activeTab, setActiveTab] = useState(initialTab);
   const tabRefs = useRef({});
   const { hasAnyPersonalizationFeature, hasMemoryOptOut } = usePersonalizationAccess();
+  const aboutEnabled = startupConfig?.interface?.buildInfo !== false;
+
+  useEffect(() => {
+    if (!aboutEnabled && activeTab === SettingsTabValues.ABOUT) {
+      setActiveTab(SettingsTabValues.GENERAL);
+    }
+  }, [aboutEnabled, activeTab]);
 
   useEffect(() => {
     if (open) {
@@ -61,6 +69,7 @@ export default function Settings({
       ...(startupConfig?.balance?.enabled ? [SettingsTabValues.BALANCE] : []),
       ...(startupConfig?.subscriptions?.enabled ? [SettingsTabValues.SUBSCRIPTION] : []),
       SettingsTabValues.ACCOUNT,
+      ...(aboutEnabled ? [SettingsTabValues.ABOUT] : []),
     ];
     const currentIndex = tabs.indexOf(activeTab);
 
@@ -146,6 +155,15 @@ export default function Settings({
       icon: <UserIcon />,
       label: 'com_nav_setting_account',
     },
+    ...(aboutEnabled
+      ? [
+          {
+            value: SettingsTabValues.ABOUT,
+            icon: <Info className="icon-sm" aria-hidden="true" />,
+            label: 'com_nav_setting_about' as TranslationKeys,
+          },
+        ]
+      : ([] as { value: SettingsTabValues; icon: React.JSX.Element; label: TranslationKeys }[])),
   ];
 
   const handleTabChange = (value: string) => {
@@ -281,6 +299,11 @@ export default function Settings({
                     <Tabs.Content value={SettingsTabValues.ACCOUNT} tabIndex={-1}>
                       <Account />
                     </Tabs.Content>
+                    {aboutEnabled && (
+                      <Tabs.Content value={SettingsTabValues.ABOUT} tabIndex={-1}>
+                        <About />
+                      </Tabs.Content>
+                    )}
                   </div>
                 </Tabs.Root>
               </div>

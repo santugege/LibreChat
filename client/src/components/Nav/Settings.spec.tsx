@@ -1,23 +1,25 @@
 import React from 'react';
 import { SettingsTabValues } from 'librechat-data-provider';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import Settings from './Settings';
 
 const mockUseGetStartupConfig = jest.fn();
-const mockUseAuthContext = jest.fn();
 
 jest.mock('~/data-provider', () => ({
   useGetStartupConfig: () => mockUseGetStartupConfig(),
 }));
 
 jest.mock('~/hooks', () => ({
-  useAuthContext: () => mockUseAuthContext(),
   useLocalize: () => (key: string) => key,
 }));
 
-jest.mock('~/hooks/usePersonalizationAccess', () => () => ({
-  hasAnyPersonalizationFeature: false,
-  hasMemoryOptOut: false,
+jest.mock('~/hooks/usePersonalizationAccess', () => ({
+  __esModule: true,
+  default: () => ({
+    hasMemoryOptOut: false,
+    hasAnyPersonalizationFeature: false,
+  }),
 }));
 
 jest.mock('@headlessui/react', () => ({
@@ -33,24 +35,25 @@ jest.mock('@headlessui/react', () => ({
 }));
 
 jest.mock('@librechat/client', () => ({
-  GearIcon: () => <span data-testid="gear-icon" />,
-  DataIcon: () => <span data-testid="data-icon" />,
-  UserIcon: () => <span data-testid="user-icon" />,
-  SpeechIcon: () => <span data-testid="speech-icon" />,
-  PersonalizationIcon: () => <span data-testid="personalization-icon" />,
+  GearIcon: () => <span aria-hidden="true" />,
+  DataIcon: () => <span aria-hidden="true" />,
+  UserIcon: () => <span aria-hidden="true" />,
+  SpeechIcon: () => <span aria-hidden="true" />,
+  PersonalizationIcon: () => <span aria-hidden="true" />,
   useMediaQuery: () => false,
 }));
 
 jest.mock('./SettingsTabs', () => ({
-  General: () => <div data-testid="general-tab" />,
-  Chat: () => <div data-testid="chat-tab" />,
-  Commands: () => <div data-testid="commands-tab" />,
-  Speech: () => <div data-testid="speech-tab" />,
-  Personalization: () => <div data-testid="personalization-tab" />,
-  Data: () => <div data-testid="data-tab" />,
-  Balance: () => <div data-testid="balance-tab" />,
-  Subscription: () => <div data-testid="subscription-tab" />,
-  Account: () => <div data-testid="account-tab" />,
+  General: () => <div data-testid="general-panel" />,
+  Chat: () => <div data-testid="chat-panel" />,
+  Commands: () => <div data-testid="commands-panel" />,
+  Speech: () => <div data-testid="speech-panel" />,
+  Personalization: () => <div data-testid="personalization-panel" />,
+  Data: () => <div data-testid="data-panel" />,
+  Balance: () => <div data-testid="balance-panel" />,
+  Subscription: () => <div data-testid="subscription-panel" />,
+  Account: () => <div data-testid="account-panel" />,
+  About: () => <div data-testid="about-panel" />,
 }));
 
 class ObserverMock {
@@ -70,9 +73,12 @@ beforeAll(() => {
   });
 });
 
+function renderSettings() {
+  return render(<Settings open={true} onOpenChange={jest.fn()} />);
+}
+
 describe('Settings', () => {
   beforeEach(() => {
-    mockUseAuthContext.mockReturnValue({ isAuthenticated: true });
     mockUseGetStartupConfig.mockReturnValue({
       data: {
         balance: { enabled: false },
@@ -87,7 +93,7 @@ describe('Settings', () => {
   });
 
   it('shows the subscription settings tab when subscriptions are enabled', () => {
-    render(<Settings open={true} onOpenChange={jest.fn()} />);
+    renderSettings();
 
     expect(screen.getByRole('tab', { name: 'com_nav_setting_subscription' })).toBeInTheDocument();
   });
@@ -97,7 +103,7 @@ describe('Settings', () => {
       <Settings open={true} onOpenChange={jest.fn()} initialTab={SettingsTabValues.SUBSCRIPTION} />,
     );
 
-    expect(screen.getByTestId('subscription-tab')).toBeInTheDocument();
+    expect(screen.getByTestId('subscription-panel')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'com_nav_setting_subscription' })).toHaveAttribute(
       'data-state',
       'active',
@@ -112,10 +118,42 @@ describe('Settings', () => {
       },
     });
 
-    render(<Settings open={true} onOpenChange={jest.fn()} />);
+    renderSettings();
 
     expect(
       screen.queryByRole('tab', { name: 'com_nav_setting_subscription' }),
     ).not.toBeInTheDocument();
+  });
+
+  it('shows the About tab while startup config is loading', () => {
+    mockUseGetStartupConfig.mockReturnValue({ data: undefined });
+
+    renderSettings();
+
+    expect(screen.getByText('com_nav_setting_about')).toBeInTheDocument();
+  });
+
+  it('hides the About tab only when buildInfo is explicitly disabled', () => {
+    mockUseGetStartupConfig.mockReturnValue({ data: { interface: { buildInfo: false } } });
+
+    renderSettings();
+
+    expect(screen.queryByText('com_nav_setting_about')).not.toBeInTheDocument();
+  });
+
+  it('resets the active tab when loaded config disables About', async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderSettings();
+
+    await user.click(screen.getByText('com_nav_setting_about'));
+    expect(screen.getByTestId('about-panel')).toBeInTheDocument();
+
+    mockUseGetStartupConfig.mockReturnValue({ data: { interface: { buildInfo: false } } });
+    rerender(<Settings open={true} onOpenChange={jest.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('about-panel')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('general-panel')).toBeInTheDocument();
   });
 });
