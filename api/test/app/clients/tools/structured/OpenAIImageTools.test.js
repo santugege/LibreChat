@@ -4,6 +4,7 @@ const { v4 } = require('uuid');
 const { Readable } = require('stream');
 const createOpenAIImageTools = require('~/app/clients/tools/structured/OpenAIImageTools');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
+const { getFiles } = require('~/models');
 
 jest.mock('axios');
 jest.mock('openai');
@@ -393,6 +394,91 @@ describe('OpenAIImageTools', () => {
 
       const formData = axios.post.mock.calls[0][1];
       expect(formData._streams.join('\n')).toContain('512x512');
+    });
+
+    it('does not call OpenAI when a referenced local image stream is missing', async () => {
+      const missingError = Object.assign(
+        new Error(
+          "ENOENT: no such file or directory, open '/app/client/public/images/test-user/missing.png'",
+        ),
+        { code: 'ENOENT' },
+      );
+      const missingStream = new Readable({
+        read() {
+          this.destroy(missingError);
+        },
+      });
+      getStrategyFunctions.mockReturnValue({
+        getDownloadStream: jest.fn().mockResolvedValue(missingStream),
+      });
+      const [, imageEditTool] = createTools({
+        imageFiles: [
+          {
+            file_id: 'source-image',
+            filepath: '/images/test-user/missing.png',
+            filename: 'missing.png',
+            type: 'image/png',
+            source: 'local',
+          },
+        ],
+      });
+
+      const [message, artifact] = await imageEditTool.func({
+        prompt: 'make it sharper',
+        image_ids: ['source-image'],
+      });
+
+      expect(axios.post).not.toHaveBeenCalled();
+      expect(message).toContain('could not be loaded');
+      expect(message).toContain('missing.png');
+      expect(message).not.toContain('OpenAI API may be unavailable');
+      expect(artifact).toEqual({});
+    });
+
+    it('does not call OpenAI when a referenced image id cannot be resolved', async () => {
+      const [, imageEditTool] = createTools();
+
+      const [message, artifact] = await imageEditTool.func({
+        prompt: 'make it sharper',
+        image_ids: ['missing-image-id'],
+      });
+
+      expect(axios.post).not.toHaveBeenCalled();
+      expect(message).toContain('Referenced image ID "missing-image-id" could not be found');
+      expect(artifact).toEqual({});
+    });
+
+    it('resolves duplicate fetched image ids for every requested position', async () => {
+      getFiles.mockResolvedValueOnce([
+        {
+          file_id: 'source-image',
+          filepath: '/images/test-user/source.png',
+          filename: 'source.png',
+          type: 'image/png',
+          source: 'local',
+          height: 1024,
+          width: 1024,
+        },
+      ]);
+      const getDownloadStream = jest
+        .fn()
+        .mockResolvedValueOnce(Readable.from(Buffer.from('first-image')))
+        .mockResolvedValueOnce(Readable.from(Buffer.from('second-image')));
+      getStrategyFunctions.mockReturnValue({ getDownloadStream });
+      const [, imageEditTool] = createTools();
+
+      await imageEditTool.func({
+        prompt: 'combine both references',
+        image_ids: ['source-image', 'source-image'],
+      });
+
+      expect(axios.post).toHaveBeenCalledTimes(1);
+      expect(getDownloadStream).toHaveBeenCalledTimes(2);
+      const formData = axios.post.mock.calls[0][1];
+      const imageParts = formData._streams.filter(
+        (part) => Buffer.isBuffer(part) && part.toString().includes('image'),
+      );
+      expect(imageParts).toHaveLength(2);
     });
   });
 });

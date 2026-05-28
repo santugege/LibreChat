@@ -65,7 +65,7 @@ function resolveEnumOption({ value, envValue, fallback, allowed, name }) {
 }
 
 function clampInteger(value, fallback, min, max) {
-  const candidate = value === '' ? fallback : value ?? fallback;
+  const candidate = value === '' ? fallback : (value ?? fallback);
   const parsed = Number(candidate);
   if (!Number.isFinite(parsed)) {
     return fallback;
@@ -190,6 +190,26 @@ function createGeneratedImageText(generatedIds, referencedIds = []) {
   return displayMessage + `\n\n${generatedText}${referencedText}`;
 }
 
+async function streamToBuffer(stream) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+function createImageLoadError(imageFile, error) {
+  const filename = imageFile?.filename || imageFile?.filepath || imageFile?.file_id || 'image';
+  const message = `Referenced image "${filename}" could not be loaded. It may still be uploading, may have expired, or may no longer exist in storage. Please upload the image again and retry.`;
+  const imageError = new Error(message);
+  imageError.cause = error;
+  return imageError;
+}
+
+function createMissingImageIdMessage(imageId) {
+  return `Referenced image ID "${imageId}" could not be found. Please choose an available image from this conversation or upload the image again.`;
+}
+
 /**
  * Creates OpenAI Image tools (generation and editing)
  * @param {Object} fields - Configuration fields
@@ -255,15 +275,7 @@ function createOpenAIImageTools(fields = {}) {
    */
   const imageGenTool = tool(
     async (
-      {
-        prompt,
-        background,
-        n,
-        output_compression,
-        output_format,
-        quality,
-        size,
-      },
+      { prompt, background, n, output_compression, output_format, quality, size },
       runnableConfig,
     ) => {
       if (!prompt) {
@@ -356,73 +368,82 @@ Error Message: ${error.message}`);
   /**
    * Image Editing Tool
    */
-  const imageEditTool = tool(
-    async ({ prompt, image_ids, quality, size }, runnableConfig) => {
-      if (!prompt) {
-        throw new Error('Missing required field: prompt');
+  const imageEditTool = tool(async ({ prompt, image_ids, quality, size }, runnableConfig) => {
+    if (!prompt) {
+      throw new Error('Missing required field: prompt');
+    }
+
+    const clientConfig = { ...closureConfig };
+    if (process.env.PROXY) {
+      const proxyAgent = new ProxyAgent(process.env.PROXY);
+      clientConfig.fetchOptions = {
+        dispatcher: proxyAgent,
+      };
+    }
+
+    const imageOptions = resolveImageOptions({
+      quality,
+      size,
+      fallbackOutputFormat: imageOutputType,
+      allowedSizes: IMAGE_EDIT_SIZES,
+    });
+    const formData = new FormData();
+    formData.append('model', imageModel);
+    formData.append('prompt', replaceUnwantedChars(prompt));
+    // TODO: `mask` support
+    // TODO: more than 1 image support
+    // formData.append('n', n.toString());
+    formData.append('quality', imageOptions.quality);
+    formData.append('size', imageOptions.size);
+
+    /** @type {Record<FileSources, undefined | NodeStreamDownloader<File>>} */
+    const streamMethods = {};
+
+    const requestFilesMap = Object.fromEntries(imageFiles.map((f) => [f.file_id, { ...f }]));
+
+    const orderedFiles = new Array(image_ids.length);
+    const idsToFetch = [];
+    const indexOfMissing = Object.create(null);
+
+    for (let i = 0; i < image_ids.length; i++) {
+      const id = image_ids[i];
+      const file = requestFilesMap[id];
+
+      if (file) {
+        orderedFiles[i] = file;
+      } else {
+        idsToFetch.push(id);
+        indexOfMissing[id] = indexOfMissing[id] || [];
+        indexOfMissing[id].push(i);
       }
+    }
 
-      const clientConfig = { ...closureConfig };
-      if (process.env.PROXY) {
-        const proxyAgent = new ProxyAgent(process.env.PROXY);
-        clientConfig.fetchOptions = {
-          dispatcher: proxyAgent,
-        };
-      }
+    if (idsToFetch.length) {
+      const fetchedFiles = await getFiles(
+        {
+          user: req.user.id,
+          file_id: { $in: idsToFetch },
+          height: { $exists: true },
+          width: { $exists: true },
+        },
+        {},
+        {},
+      );
 
-      const imageOptions = resolveImageOptions({
-        quality,
-        size,
-        fallbackOutputFormat: imageOutputType,
-        allowedSizes: IMAGE_EDIT_SIZES,
-      });
-      const formData = new FormData();
-      formData.append('model', imageModel);
-      formData.append('prompt', replaceUnwantedChars(prompt));
-      // TODO: `mask` support
-      // TODO: more than 1 image support
-      // formData.append('n', n.toString());
-      formData.append('quality', imageOptions.quality);
-      formData.append('size', imageOptions.size);
-
-      /** @type {Record<FileSources, undefined | NodeStreamDownloader<File>>} */
-      const streamMethods = {};
-
-      const requestFilesMap = Object.fromEntries(imageFiles.map((f) => [f.file_id, { ...f }]));
-
-      const orderedFiles = new Array(image_ids.length);
-      const idsToFetch = [];
-      const indexOfMissing = Object.create(null);
-
-      for (let i = 0; i < image_ids.length; i++) {
-        const id = image_ids[i];
-        const file = requestFilesMap[id];
-
-        if (file) {
-          orderedFiles[i] = file;
-        } else {
-          idsToFetch.push(id);
-          indexOfMissing[id] = i;
+      for (const file of fetchedFiles) {
+        requestFilesMap[file.file_id] = file;
+        for (const index of indexOfMissing[file.file_id] ?? []) {
+          orderedFiles[index] = file;
         }
       }
+    }
 
-      if (idsToFetch.length) {
-        const fetchedFiles = await getFiles(
-          {
-            user: req.user.id,
-            file_id: { $in: idsToFetch },
-            height: { $exists: true },
-            width: { $exists: true },
-          },
-          {},
-          {},
-        );
+    const missingImageId = image_ids.find((id, index) => id && !orderedFiles[index]);
+    if (missingImageId) {
+      return returnValue(createMissingImageIdMessage(missingImageId));
+    }
 
-        for (const file of fetchedFiles) {
-          requestFilesMap[file.file_id] = file;
-          orderedFiles[indexOfMissing[file.file_id]] = file;
-        }
-      }
+    try {
       for (const imageFile of orderedFiles) {
         if (!imageFile) {
           continue;
@@ -444,95 +465,102 @@ Error Message: ${error.message}`);
         if (!getDownloadStream) {
           throw new Error(`No download stream method found for source: ${source}`);
         }
-        stream = await getDownloadStream(req, imageFile.filepath);
-        if (!stream) {
-          throw new Error('Failed to get download stream for image file');
+        try {
+          stream = await getDownloadStream(req, imageFile.storageKey || imageFile.filepath);
+          if (!stream) {
+            throw new Error('Failed to get download stream for image file');
+          }
+          const imageBuffer = await streamToBuffer(stream);
+          formData.append('image[]', imageBuffer, {
+            filename: imageFile.filename,
+            contentType: imageFile.type,
+          });
+        } catch (error) {
+          throw createImageLoadError(imageFile, error);
         }
-        formData.append('image[]', stream, {
-          filename: imageFile.filename,
-          contentType: imageFile.type,
-        });
+      }
+    } catch (error) {
+      logger.warn('[image_edit_oai] Problem loading referenced image:', error);
+      return returnValue(error.message || 'Referenced image could not be loaded.');
+    }
+
+    /** @type {import('axios').RawAxiosHeaders} */
+    let headers = {
+      ...formData.getHeaders(),
+    };
+
+    if (process.env.IMAGE_GEN_OAI_AZURE_API_VERSION && process.env.IMAGE_GEN_OAI_BASEURL) {
+      headers['api-key'] = apiKey;
+    } else {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
+    /** @type {AbortSignal} */
+    let derivedSignal = null;
+    /** @type {() => void} */
+    let abortHandler = null;
+
+    try {
+      if (runnableConfig?.signal) {
+        derivedSignal = AbortSignal.any([runnableConfig.signal]);
+        abortHandler = createAbortHandler();
+        derivedSignal.addEventListener('abort', abortHandler, { once: true });
       }
 
-      /** @type {import('axios').RawAxiosHeaders} */
-      let headers = {
-        ...formData.getHeaders(),
+      /** @type {import('axios').AxiosRequestConfig} */
+      const axiosConfig = {
+        headers,
+        ...clientConfig,
+        signal: derivedSignal,
+        baseURL,
       };
 
+      if (process.env.PROXY) {
+        axiosConfig.httpsAgent = new HttpsProxyAgent(process.env.PROXY);
+      }
+
       if (process.env.IMAGE_GEN_OAI_AZURE_API_VERSION && process.env.IMAGE_GEN_OAI_BASEURL) {
-        headers['api-key'] = apiKey;
-      } else {
-        headers['Authorization'] = `Bearer ${apiKey}`;
-      }
-
-      /** @type {AbortSignal} */
-      let derivedSignal = null;
-      /** @type {() => void} */
-      let abortHandler = null;
-
-      try {
-        if (runnableConfig?.signal) {
-          derivedSignal = AbortSignal.any([runnableConfig.signal]);
-          abortHandler = createAbortHandler();
-          derivedSignal.addEventListener('abort', abortHandler, { once: true });
-        }
-
-        /** @type {import('axios').AxiosRequestConfig} */
-        const axiosConfig = {
-          headers,
-          ...clientConfig,
-          signal: derivedSignal,
-          baseURL,
+        axiosConfig.params = {
+          'api-version': process.env.IMAGE_GEN_OAI_AZURE_API_VERSION,
+          ...axiosConfig.params,
         };
-
-        if (process.env.PROXY) {
-          axiosConfig.httpsAgent = new HttpsProxyAgent(process.env.PROXY);
-        }
-
-        if (process.env.IMAGE_GEN_OAI_AZURE_API_VERSION && process.env.IMAGE_GEN_OAI_BASEURL) {
-          axiosConfig.params = {
-            'api-version': process.env.IMAGE_GEN_OAI_AZURE_API_VERSION,
-            ...axiosConfig.params,
-          };
-        }
-        const response = await axios.post('/images/edits', formData, axiosConfig);
-
-        if (!response.data || !response.data.data || !response.data.data.length) {
-          return returnValue(
-            'No image data returned from OpenAI API. There may be a problem with the API or your configuration.',
-          );
-        }
-
-        const { content, file_ids, generatedIds } = createImageArtifacts(
-          response.data.data,
-          imageOutputType,
-        );
-        if (!content.length) {
-          return returnValue(
-            'No image data returned from OpenAI API. There may be a problem with the API or your configuration.',
-          );
-        }
-
-        const textResponse = [
-          {
-            type: ContentTypes.TEXT,
-            text: createGeneratedImageText(generatedIds, image_ids),
-          },
-        ];
-        return [textResponse, { content, file_ids }];
-      } catch (error) {
-        const message = '[image_edit_oai] Problem editing the image:';
-        logAxiosError({ error, message });
-        return returnValue(`Something went wrong when trying to edit the image. The OpenAI API may be unavailable:
-Error Message: ${error.message || 'Unknown error'}`);
-      } finally {
-        if (abortHandler && derivedSignal) {
-          derivedSignal.removeEventListener('abort', abortHandler);
-        }
       }
-    },
-    oaiToolkit.image_edit_oai,
-  );
+      const response = await axios.post('/images/edits', formData, axiosConfig);
+
+      if (!response.data || !response.data.data || !response.data.data.length) {
+        return returnValue(
+          'No image data returned from OpenAI API. There may be a problem with the API or your configuration.',
+        );
+      }
+
+      const { content, file_ids, generatedIds } = createImageArtifacts(
+        response.data.data,
+        imageOutputType,
+      );
+      if (!content.length) {
+        return returnValue(
+          'No image data returned from OpenAI API. There may be a problem with the API or your configuration.',
+        );
+      }
+
+      const textResponse = [
+        {
+          type: ContentTypes.TEXT,
+          text: createGeneratedImageText(generatedIds, image_ids),
+        },
+      ];
+      return [textResponse, { content, file_ids }];
+    } catch (error) {
+      const message = '[image_edit_oai] Problem editing the image:';
+      logAxiosError({ error, message });
+      return returnValue(`Something went wrong when trying to edit the image. The OpenAI API may be unavailable:
+Error Message: ${error.message || 'Unknown error'}`);
+    } finally {
+      if (abortHandler && derivedSignal) {
+        derivedSignal.removeEventListener('abort', abortHandler);
+      }
+    }
+  }, oaiToolkit.image_edit_oai);
 
   return [imageGenTool, imageEditTool];
 }
