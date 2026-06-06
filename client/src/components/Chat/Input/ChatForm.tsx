@@ -281,7 +281,6 @@ const ChatForm = memo(function ChatForm({
             )}
           >
             <TextareaHeader addedConvo={addedConvo} setAddedConvo={setAddedConvo} />
-            <ImageGenerationOptions conversation={conversation} />
             <PendingManualSkillsChips conversationId={conversationId} />
             {/* WIP */}
             <EditBadges
@@ -404,6 +403,7 @@ const ChatForm = memo(function ChatForm({
             {TextToSpeech && automaticPlayback && <StreamAudio index={index} />}
           </div>
         </div>
+        <ImageGenerationOptions conversation={conversation} />
       </div>
     </form>
   );

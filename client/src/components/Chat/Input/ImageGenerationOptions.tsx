@@ -84,7 +84,8 @@ function ImageGenerationOptions({ conversation }: { conversation: TConversation 
 
   return (
     <div
-      className="flex flex-wrap items-center gap-1.5 px-2 pt-2"
+      data-testid="image-generation-options"
+      className="mt-2 flex flex-wrap items-center gap-1.5 px-1 sm:px-2"
       onClick={(event) => event.stopPropagation()}
     >
       <span className="inline-flex size-6 items-center justify-center rounded-full bg-surface-secondary text-text-secondary">
