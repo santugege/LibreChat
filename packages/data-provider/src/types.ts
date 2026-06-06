@@ -106,6 +106,15 @@ export type TEphemeralAgent = {
   skills?: boolean;
 };
 
+export type TImageGenerationQuality = 'auto' | 'high' | 'medium' | 'low';
+
+export type TImageGenerationSize = 'auto' | '1024x1024' | '1536x1024' | '1024x1536';
+
+export type TImageGenerationOptions = {
+  quality: TImageGenerationQuality;
+  size: TImageGenerationSize;
+};
+
 export type TPayload = Partial<TMessage> &
   Partial<TEndpointOption> & {
     isContinued: boolean;
@@ -124,6 +133,7 @@ export type TPayload = Partial<TMessage> &
      * before the LLM turn runs.
      */
     manualSkills?: string[];
+    imageGenerationOptions?: TImageGenerationOptions;
   };
 
 export type TEditedContent =
@@ -155,6 +165,7 @@ export type TSubmission = {
   addedConvo?: TConversation;
   /** Skills the user invoked via the `$` popover for this submission. */
   manualSkills?: string[];
+  imageGenerationOptions?: TImageGenerationOptions;
 };
 
 export type EventSubmission = Omit<TSubmission, 'initialResponse'> & { initialResponse: TMessage };

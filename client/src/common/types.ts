@@ -335,6 +335,7 @@ export type TAskProps = {
   conversationId?: string | null;
   messageId?: string | null;
   clientTimestamp?: string;
+  imageGenerationOptions?: t.TImageGenerationOptions;
 };
 
 export type TOptions = {

@@ -230,6 +230,7 @@ function createOpenAIImageTools(fields = {}) {
     throw new Error('This tool is only available for agents.');
   }
   const { req } = fields;
+  const requestImageOptions = req?.body?.imageGenerationOptions ?? {};
   const imageOutputType = fields.imageOutputType || EImageOutputType.PNG;
   const appFileStrategy = fields.fileStrategy;
 
@@ -296,8 +297,8 @@ function createOpenAIImageTools(fields = {}) {
         n,
         output_compression,
         output_format,
-        quality,
-        size,
+        quality: quality ?? requestImageOptions.quality,
+        size: size ?? requestImageOptions.size,
         fallbackOutputFormat: imageOutputType,
       });
 
@@ -382,8 +383,8 @@ Error Message: ${error.message}`);
     }
 
     const imageOptions = resolveImageOptions({
-      quality,
-      size,
+      quality: quality ?? requestImageOptions.quality,
+      size: size ?? requestImageOptions.size,
       fallbackOutputFormat: imageOutputType,
       allowedSizes: IMAGE_EDIT_SIZES,
     });

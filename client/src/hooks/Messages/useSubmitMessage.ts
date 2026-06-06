@@ -4,6 +4,7 @@ import { replaceSpecialVars } from 'librechat-data-provider';
 import { useChatContext, useChatFormContext, useAddedChatContext } from '~/Providers';
 import { useAuthContext } from '~/hooks/AuthContext';
 import { useLatestMessage } from '~/hooks/Messages/useLatestMessage';
+import { buildImageGenerationPayload } from '~/utils/imageAgentOptions';
 import { mainTextareaId } from '~/common';
 import store from '~/store';
 
@@ -11,10 +12,11 @@ export default function useSubmitMessage() {
   const { user } = useAuthContext();
   const methods = useChatFormContext();
   const { conversation: addedConvo } = useAddedChatContext();
-  const { ask, index, getMessages, setMessages } = useChatContext();
+  const { ask, index, getMessages, setMessages, conversation } = useChatContext();
   const latestMessage = useLatestMessage(index);
 
   const autoSendPrompts = useRecoilValue(store.autoSendPrompts);
+  const imageGenerationOptions = useRecoilValue(store.imageGenerationOptions);
   const setActivePrompt = useSetRecoilState(store.activePromptByIndex(index));
 
   const submitMessage = useCallback(
@@ -33,6 +35,7 @@ export default function useSubmitMessage() {
       ask(
         {
           text: data.text,
+          imageGenerationOptions: buildImageGenerationPayload(conversation, imageGenerationOptions),
         },
         {
           addedConvo: addedConvo ?? undefined,
@@ -40,7 +43,16 @@ export default function useSubmitMessage() {
       );
       methods.reset();
     },
-    [ask, methods, addedConvo, setMessages, getMessages, latestMessage],
+    [
+      ask,
+      methods,
+      addedConvo,
+      setMessages,
+      getMessages,
+      latestMessage,
+      conversation,
+      imageGenerationOptions,
+    ],
   );
 
   const submitPrompt = useCallback(

@@ -52,6 +52,16 @@ endpoints:
       dropParams:
         - 'stop'
 
+modelSpecs:
+  prioritize: true
+  list:
+    - name: image-agent
+      label: '图片智能体'
+      default: true
+      preset:
+        endpoint: agents
+        agent_id: agent_oGoyU0fHfvwXk-b35_VvJ
+
 fileConfig:
   endpoints:
     NS2E:

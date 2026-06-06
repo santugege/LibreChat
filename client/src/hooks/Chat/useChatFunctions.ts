@@ -105,6 +105,7 @@ export default function useChatFunctions({
       parentMessageId = null,
       conversationId = null,
       messageId = null,
+      imageGenerationOptions,
     },
     {
       editedContent = null,
@@ -389,6 +390,7 @@ export default function useChatFunctions({
       editedContent,
       addedConvo,
       manualSkills: manualSkills.length > 0 ? manualSkills : undefined,
+      imageGenerationOptions,
     };
 
     if (isRegenerate) {

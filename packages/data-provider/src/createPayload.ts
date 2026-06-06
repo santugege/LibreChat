@@ -15,6 +15,7 @@ export default function createPayload(submission: t.TSubmission) {
     ephemeralAgent,
     endpointOption,
     manualSkills,
+    imageGenerationOptions,
   } = submission;
   const { conversationId } = s.tConvoUpdateSchema.parse(conversation);
   const { endpoint: _e, endpointType } = endpointOption as {
@@ -42,6 +43,7 @@ export default function createPayload(submission: t.TSubmission) {
     isContinued: !!(isEdited && isContinued),
     ephemeralAgent: s.isAssistantsEndpoint(endpoint) ? undefined : ephemeralAgent,
     manualSkills: s.isAssistantsEndpoint(endpoint) ? undefined : manualSkills,
+    imageGenerationOptions,
   };
 
   return { server, payload };

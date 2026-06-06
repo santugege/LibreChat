@@ -22,6 +22,7 @@ import {
   useFocusChatEffect,
 } from '~/hooks';
 import PendingManualSkillsChips from './PendingManualSkillsChips';
+import ImageGenerationOptions from './ImageGenerationOptions';
 import { cn, getModelSpec, removeFocusRings } from '~/utils';
 import { useGetStartupConfig } from '~/data-provider';
 import { mainTextareaId, BadgeItem } from '~/common';
@@ -280,6 +281,7 @@ const ChatForm = memo(function ChatForm({
             )}
           >
             <TextareaHeader addedConvo={addedConvo} setAddedConvo={setAddedConvo} />
+            <ImageGenerationOptions conversation={conversation} />
             <PendingManualSkillsChips conversationId={conversationId} />
             {/* WIP */}
             <EditBadges
