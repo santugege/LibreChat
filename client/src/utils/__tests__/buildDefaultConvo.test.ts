@@ -1,5 +1,6 @@
 import { EModelEndpoint } from 'librechat-data-provider';
 import type { TConversation } from 'librechat-data-provider';
+import { IMAGE_AGENT_ID } from '../imageAgentOptions';
 import buildDefaultConvo from '../buildDefaultConvo';
 
 jest.mock('../localStorage', () => ({
@@ -19,6 +20,28 @@ const baseConversation: TConversation = {
 };
 
 describe('buildDefaultConvo - defaultParamsEndpoint', () => {
+  describe('agents endpoint presets', () => {
+    it('preserves a configured image agent id from the default model spec preset', () => {
+      const preset: TConversation = {
+        ...baseConversation,
+        endpoint: EModelEndpoint.agents,
+        agent_id: IMAGE_AGENT_ID,
+        spec: 'image-agent',
+      };
+
+      const result = buildDefaultConvo({
+        models: [],
+        conversation: baseConversation,
+        endpoint: EModelEndpoint.agents,
+        lastConversationSetup: preset,
+      });
+
+      expect(result.endpoint).toBe(EModelEndpoint.agents);
+      expect(result.agent_id).toBe(IMAGE_AGENT_ID);
+      expect(result.model).toBeUndefined();
+    });
+  });
+
   describe('custom endpoint with defaultParamsEndpoint: anthropic', () => {
     const models = ['anthropic/claude-opus-4.5', 'anthropic/claude-sonnet-4'];
 
