@@ -20,6 +20,12 @@ import type { SubscriptionPlanView } from './types';
 import { parsePagination } from '../admin/pagination';
 import { getSubscriptionConfig } from './config';
 import { createQuotaService } from './quota';
+import {
+  createRedemptionService,
+  type CreateRedemptionBatchBody,
+  type RedemptionServiceDb,
+  type RedeemRedemptionCodeBody,
+} from './redemption';
 import { getQuotaWindow } from './windows';
 
 type RouteUser = {
@@ -105,7 +111,7 @@ type SubscriptionUsageBucketView = {
   imageUsed: number;
 };
 
-type SubscriptionRouteDb = {
+type SubscriptionRouteDb = RedemptionServiceDb & {
   listSubscriptionPlans: (tenantId?: string) => Promise<SubscriptionPlanView[]>;
   createSubscriptionPlan: (
     input: SubscriptionPlanView & { tenantId?: string },
@@ -182,6 +188,7 @@ type CreateSubscriptionRouterDeps = {
   db: SubscriptionRouteDb;
   requireJwtAuth: express.RequestHandler;
   requireAdminAccess: express.RequestHandler;
+  redeemRateLimiter?: express.RequestHandler;
   createQuotaService?: (deps: QuotaServiceDeps) => ReturnType<typeof createQuotaService>;
   createPaymentService: (db: SubscriptionRouteDb) => SubscriptionPaymentRouteService;
 };
@@ -193,6 +200,7 @@ type StringRecord = {
 const invalidSubscriptionPlanRequestMessage = 'Invalid subscription plan request';
 const invalidQuotaExemptionRequestMessage = 'Invalid subscription quota exemption request';
 const invalidSubscriptionPaymentOrderRequestMessage = 'Invalid subscription payment order request';
+const invalidRedemptionRequestMessage = 'Invalid or unavailable redemption code';
 const subscriptionOrderStatuses = new Set<TSubscriptionOrderStatus>([
   'pending',
   'paid',
@@ -488,6 +496,10 @@ function throwInvalidSubscriptionPaymentOrderRequest(): never {
   throw new Error(invalidSubscriptionPaymentOrderRequestMessage);
 }
 
+function throwInvalidRedemptionRequest(): never {
+  throw new Error('Invalid redemption request');
+}
+
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
@@ -512,6 +524,40 @@ function getQuotaExemptionBody(body: unknown): { email: string } {
 
   assertAllowedKeys(body, quotaExemptionKeys);
   return { email: getQuotaExemptionEmail(body.email) };
+}
+
+function getRedemptionCodeBody(body: unknown): RedeemRedemptionCodeBody {
+  if (!isObjectRecord(body) || typeof body.code !== 'string') {
+    throwInvalidRedemptionRequest();
+  }
+
+  return { code: body.code };
+}
+
+function getRedemptionNumber(record: { [key: string]: unknown }, key: string): number {
+  const value = record[key];
+  return typeof value === 'number' ? value : Number(value);
+}
+
+function getRedemptionBatchBody(body: unknown): CreateRedemptionBatchBody {
+  if (!isObjectRecord(body)) {
+    throwInvalidRedemptionRequest();
+  }
+
+  return {
+    name: String(body.name ?? ''),
+    quantity: getRedemptionNumber(body, 'quantity'),
+    durationDays: getRedemptionNumber(body, 'durationDays'),
+    textDailyLimit: getRedemptionNumber(body, 'textDailyLimit'),
+    imageDailyLimit: getRedemptionNumber(body, 'imageDailyLimit'),
+    ...(typeof body.planKey === 'string' ? { planKey: body.planKey } : {}),
+    ...(typeof body.planName === 'string' ? { planName: body.planName } : {}),
+    ...(typeof body.planDescription === 'string' ? { planDescription: body.planDescription } : {}),
+    ...(typeof body.planAmount === 'number' ? { planAmount: body.planAmount } : {}),
+    ...(typeof body.expiresAt === 'string' ? { expiresAt: body.expiresAt } : {}),
+    ...(typeof body.note === 'string' ? { note: body.note } : {}),
+    ...(typeof body.campaign === 'string' ? { campaign: body.campaign } : {}),
+  };
 }
 
 function isInvalidSubscriptionPlanRequest(error: unknown): boolean {
@@ -563,6 +609,19 @@ function handleSubscriptionPaymentOrderRouteError(
 ): void {
   if (isInvalidSubscriptionPaymentOrderRequest(error)) {
     res.status(400).json({ message: invalidSubscriptionPaymentOrderRequestMessage });
+    return;
+  }
+
+  next(error);
+}
+
+function handleRedemptionRouteError(
+  error: unknown,
+  res: express.Response,
+  next: express.NextFunction,
+): void {
+  if (error instanceof Error && error.message.includes('Invalid redemption')) {
+    res.status(400).json({ message: invalidRedemptionRequestMessage });
     return;
   }
 
@@ -751,6 +810,8 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
   const router = express.Router();
   const getQuotaService = deps.createQuotaService ?? createQuotaService;
   const payment = deps.createPaymentService(deps.db);
+  const redemption = createRedemptionService({ db: deps.db });
+  const redeemRateLimiter = deps.redeemRateLimiter ?? ((_req, _res, next) => next());
   const quotaDeps: QuotaServiceDeps = {
     getPlans: deps.db.getEnabledSubscriptionPlans,
     findActiveUserSubscription: deps.db.findActiveUserSubscription,
@@ -839,6 +900,19 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
     }
   });
 
+  router.post('/redeem', deps.requireJwtAuth, redeemRateLimiter, async (req, res, next) => {
+    try {
+      const user = getAuthenticatedUser(req);
+      const result = await redemption.redeem({
+        user,
+        body: getRedemptionCodeBody(req.body),
+      });
+      res.json(result);
+    } catch (error) {
+      handleRedemptionRouteError(error, res, next);
+    }
+  });
+
   router.get(
     '/admin/orders',
     deps.requireJwtAuth,
@@ -897,6 +971,24 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
         res.json(serializeOrder(updated));
       } catch (error) {
         next(error);
+      }
+    },
+  );
+
+  router.post(
+    '/admin/redemption-batches',
+    deps.requireJwtAuth,
+    deps.requireAdminAccess,
+    async (req, res, next) => {
+      try {
+        const user = getAuthenticatedUser(req);
+        const result = await redemption.createBatch({
+          adminUser: user,
+          body: getRedemptionBatchBody(req.body),
+        });
+        res.status(201).json(result);
+      } catch (error) {
+        handleRedemptionRouteError(error, res, next);
       }
     },
   );

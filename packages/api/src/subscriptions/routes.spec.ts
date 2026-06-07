@@ -136,6 +136,10 @@ function createDb(overrides: Partial<AdminSubscriptionRouteDb> = {}): AdminSubsc
     isSubscriptionQuotaExempt: async () => false,
     listSubscriptionPaymentOrders: async () => [],
     countSubscriptionPaymentOrders: async () => 0,
+    createSubscriptionRedemptionBatch: async () => null,
+    insertSubscriptionRedemptionCodes: async () => [],
+    redeemSubscriptionRedemptionCode: async () => null,
+    createOrExtendUserSubscription: async () => null,
     ...overrides,
   };
 }
@@ -155,6 +159,14 @@ function createPaymentService() {
 }
 
 describe('createSubscriptionRouter', () => {
+  beforeEach(() => {
+    process.env.REDEMPTION_CODE_SECRET = 'route-test-secret';
+  });
+
+  afterEach(() => {
+    delete process.env.REDEMPTION_CODE_SECRET;
+  });
+
   test('returns plans for the authenticated tenant', async () => {
     const tenantIds: Array<string | undefined> = [];
     const app = createApp({
@@ -436,6 +448,137 @@ describe('createSubscriptionRouter', () => {
       amount: 29.5,
       completedAt: '2026-05-02T00:00:00.000Z',
     });
+  });
+
+  test('redeems a subscription code for the authenticated user', async () => {
+    const redeemInputs: unknown[] = [];
+    const subscriptionInputs: unknown[] = [];
+    const app = createApp({
+      db: createDb({
+        redeemSubscriptionRedemptionCode: async (input) => {
+          redeemInputs.push(input);
+          return {
+            _id: 'code-1',
+            codeHash: input.codeHash,
+            codePrefix: 'LC-ABCD',
+            status: 'redeemed',
+            durationDays: 30,
+            textDailyLimit: 1000,
+            imageDailyLimit: 20,
+            planKey: 'redeem-30d',
+            planName: 'Taobao 30 Day',
+            planAmount: 0,
+            sourceSubscriptionId: 'code-1',
+          };
+        },
+        createOrExtendUserSubscription: async (input) => {
+          subscriptionInputs.push(input);
+          return {
+            _id: 'subscription-1',
+            user: input.user,
+            planKey: input.planKey,
+            status: 'active',
+            startsAt: new Date('2026-06-07T00:00:00.000Z'),
+            expiresAt: new Date('2026-07-07T00:00:00.000Z'),
+          };
+        },
+      }),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'user-1', tenantId: 'tenant-a' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService,
+    });
+
+    const response = await requestApp(app, '/api/subscriptions/redeem', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'LC-ABCD-EFGH-JKLM-NPQR' }),
+    });
+    const body = await readJson<{
+      subscription: { planKey: string; startsAt: string; expiresAt: string };
+      plan: { key: string; textDailyLimit: number; imageDailyLimit: number };
+    }>(response);
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      subscription: {
+        planKey: 'redeem-30d',
+        startsAt: '2026-06-07T00:00:00.000Z',
+        expiresAt: '2026-07-07T00:00:00.000Z',
+      },
+      plan: {
+        key: 'redeem-30d',
+        textDailyLimit: 1000,
+        imageDailyLimit: 20,
+      },
+    });
+    expect(redeemInputs[0]).toMatchObject({
+      user: 'user-1',
+      tenantId: 'tenant-a',
+    });
+    expect(subscriptionInputs[0]).toMatchObject({
+      user: 'user-1',
+      planKey: 'redeem-30d',
+      durationDays: 30,
+      sourceOrderId: 'code-1',
+      tenantId: 'tenant-a',
+    });
+  });
+
+  test('runs the redeem rate limiter before redeeming a subscription code', async () => {
+    const calls: string[] = [];
+    const app = createApp({
+      db: createDb({
+        redeemSubscriptionRedemptionCode: async () => {
+          calls.push('redeem');
+          return null;
+        },
+      }),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'user-1' };
+        calls.push('auth');
+        next();
+      },
+      requireAdminAccess,
+      redeemRateLimiter: (_req, _res, next) => {
+        calls.push('limit');
+        next();
+      },
+      createPaymentService,
+    });
+
+    const response = await requestApp(app, '/api/subscriptions/redeem', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'LC-ABCD-EFGH-JKLM-NPQR' }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(calls).toEqual(['auth', 'limit', 'redeem']);
+  });
+
+  test('returns 400 for invalid subscription redemption requests', async () => {
+    const app = createApp({
+      db: createDb(),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'user-1' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService,
+    });
+
+    const response = await requestApp(app, '/api/subscriptions/redeem', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: '' }),
+    });
+    const body = await readJson<{ message: string }>(response);
+
+    expect(response.status).toBe(400);
+    expect(body).toEqual({ message: 'Invalid or unavailable redemption code' });
   });
 
   test('reconciles an old pending user payment order before returning it', async () => {
@@ -761,6 +904,70 @@ describe('createSubscriptionRouter', () => {
       status: 'completed',
       tenantId: 'tenant-a',
     });
+  });
+
+  test('admin creates a redemption batch for the authenticated tenant', async () => {
+    const batchInputs: unknown[] = [];
+    const codeInputs: unknown[] = [];
+    const app = createApp({
+      db: createDb({
+        createSubscriptionRedemptionBatch: async (input) => {
+          batchInputs.push(input);
+          return {
+            ...input,
+            _id: 'batch-1',
+          };
+        },
+        insertSubscriptionRedemptionCodes: async (input) => {
+          codeInputs.push(input);
+          return input.map((code, index) => ({ ...code, _id: `code-${index + 1}` }));
+        },
+      }),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'admin-1', tenantId: 'tenant-a' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService,
+    });
+
+    const response = await requestApp(app, '/api/subscriptions/admin/redemption-batches', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Taobao',
+        quantity: 1,
+        durationDays: 30,
+        textDailyLimit: 1000,
+        imageDailyLimit: 20,
+        campaign: 'sku-30d',
+      }),
+    });
+    const body = await readJson<{
+      batch: { id: string; name: string; quantity: number };
+      codes: Array<{ code: string; prefix: string }>;
+    }>(response);
+
+    expect(response.status).toBe(201);
+    expect(body.batch).toMatchObject({ id: 'batch-1', name: 'Taobao', quantity: 1 });
+    expect(body.codes).toHaveLength(1);
+    expect(body.codes[0].code).toMatch(/^LC-/);
+    expect(batchInputs[0]).toMatchObject({
+      name: 'Taobao',
+      quantity: 1,
+      durationDays: 30,
+      textDailyLimit: 1000,
+      imageDailyLimit: 20,
+      campaign: 'sku-30d',
+      createdBy: 'admin-1',
+      tenantId: 'tenant-a',
+    });
+    expect((codeInputs[0] as Array<{ codeHash: string; codePrefix: string }>)[0]).toMatchObject({
+      codePrefix: body.codes[0].prefix,
+    });
+    expect((codeInputs[0] as Array<{ codeHash: string }>)[0].codeHash).not.toBe(
+      body.codes[0].code,
+    );
   });
 
   test('admin reconcile endpoint reconciles a payment order and returns the latest status', async () => {

@@ -5,7 +5,7 @@ const {
 } = require('@librechat/api');
 const { SystemCapabilities } = require('@librechat/data-schemas');
 const db = require('~/models');
-const requireJwtAuth = require('~/server/middleware/requireJwtAuth');
+const { redemptionLimiter, requireJwtAuth } = require('~/server/middleware');
 const { requireCapability } = require('~/server/middleware/roles/capabilities');
 
 const requireAdminAccess = requireCapability(SystemCapabilities.ACCESS_ADMIN);
@@ -15,6 +15,7 @@ const subscriptionRouter = createSubscriptionRouter({
   db,
   requireJwtAuth,
   requireAdminAccess,
+  redeemRateLimiter: redemptionLimiter,
   createQuotaService: (quotaDeps) => createQuotaService(quotaDeps),
   createPaymentService: () => subscriptionPaymentService,
 });
