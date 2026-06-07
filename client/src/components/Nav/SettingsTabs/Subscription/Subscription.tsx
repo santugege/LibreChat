@@ -18,6 +18,7 @@ import { useAuthContext, useLocalize } from '~/hooks';
 import AdminQuotaExemptionManager from './AdminQuotaExemptionManager';
 import AdminPlanManager from './AdminPlanManager';
 import PlanList from './PlanList';
+import RedemptionCodeForm from './RedemptionCodeForm';
 import UsageMeter from './UsageMeter';
 import { useRefreshSubscriptionStatusOnCompletedOrder } from './hooks';
 
@@ -148,6 +149,8 @@ function Subscription() {
           </div>
         )}
       </section>
+
+      <RedemptionCodeForm />
 
       {!paymentConfigured && (
         <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-text-primary">

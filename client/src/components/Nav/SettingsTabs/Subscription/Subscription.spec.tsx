@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryKeys, SystemRoles } from 'librechat-data-provider';
 import type {
   TCreateSubscriptionOrderRequest,
@@ -17,6 +18,7 @@ const mockUseGetStartupConfig = jest.fn();
 const mockUseGetSubscriptionPlans = jest.fn();
 const mockUseGetSubscriptionStatus = jest.fn();
 const mockUseCreateSubscriptionOrder = jest.fn();
+const mockUseRedeemSubscriptionCode = jest.fn();
 const mockUseGetSubscriptionOrder = jest.fn();
 const mockUseGetSubscriptionAdminPlans = jest.fn();
 const mockUseCreateSubscriptionAdminPlan = jest.fn();
@@ -48,6 +50,7 @@ jest.mock('~/data-provider', () => ({
   useGetSubscriptionPlans: (...args: unknown[]) => mockUseGetSubscriptionPlans(...args),
   useGetSubscriptionStatus: (...args: unknown[]) => mockUseGetSubscriptionStatus(...args),
   useCreateSubscriptionOrder: () => mockUseCreateSubscriptionOrder(),
+  useRedeemSubscriptionCode: () => mockUseRedeemSubscriptionCode(),
   useGetSubscriptionOrder: (...args: unknown[]) => mockUseGetSubscriptionOrder(...args),
   useGetSubscriptionAdminPlans: () => mockUseGetSubscriptionAdminPlans(),
   useCreateSubscriptionAdminPlan: () => mockUseCreateSubscriptionAdminPlan(),
@@ -112,6 +115,12 @@ describe('Subscription settings tab', () => {
     mockUseGetSubscriptionPlans.mockReturnValue({ data: plans, isLoading: false });
     mockUseGetSubscriptionStatus.mockReturnValue({ data: status, isLoading: false });
     mockUseCreateSubscriptionOrder.mockReturnValue({ mutate: jest.fn(), isLoading: false });
+    mockUseRedeemSubscriptionCode.mockReturnValue({
+      mutate: jest.fn(),
+      isLoading: false,
+      isError: false,
+      isSuccess: false,
+    });
     mockUseGetSubscriptionOrder.mockReturnValue({ data: undefined });
     mockUseGetSubscriptionAdminPlans.mockReturnValue({ data: plans, isLoading: false });
     mockUseCreateSubscriptionAdminPlan.mockReturnValue({
@@ -160,6 +169,28 @@ describe('Subscription settings tab', () => {
     expect(screen.getByText('com_nav_subscription_text_quota')).toBeInTheDocument();
     expect(screen.getByText('2 / 20')).toBeInTheDocument();
     expect(screen.getByText('1 / 2')).toBeInTheDocument();
+  });
+
+  it('redeems a code from the subscription tab', async () => {
+    const mutate = jest.fn();
+    mockUseRedeemSubscriptionCode.mockReturnValue({
+      mutate,
+      isLoading: false,
+      isError: false,
+      isSuccess: false,
+    });
+
+    render(<Subscription />);
+
+    await userEvent.type(screen.getByLabelText('com_nav_subscription_redeem_code_label'), 'LC-ABCD');
+    await userEvent.click(
+      screen.getByRole('button', { name: 'com_nav_subscription_redeem_submit' }),
+    );
+
+    expect(mutate).toHaveBeenCalledWith(
+      { code: 'LC-ABCD' },
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
   });
 
   it('disables paid checkout buttons when payment is not configured', () => {
