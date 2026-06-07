@@ -34,6 +34,8 @@ export function useStreamStatus(conversationId: string | undefined, enabled = tr
 }
 
 export const genTitleQueryKey = (conversationId: string) => ['genTitle', conversationId] as const;
+const TITLE_FETCH_RETRY_DELAY = 2000;
+const TITLE_FETCH_MAX_RETRIES = 2;
 
 /** Response type for active jobs query */
 export interface ActiveJobsResponse {
@@ -101,7 +103,8 @@ export function useTitleGeneration(enabled = true) {
       queryKey: genTitleQueryKey(conversationId),
       queryFn: () => dataService.genTitle({ conversationId }),
       staleTime: Infinity,
-      retry: false,
+      retry: TITLE_FETCH_MAX_RETRIES,
+      retryDelay: TITLE_FETCH_RETRY_DELAY,
     })),
   });
 
