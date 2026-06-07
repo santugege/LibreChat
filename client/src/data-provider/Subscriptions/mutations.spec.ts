@@ -3,7 +3,10 @@ import { QueryKeys, dataService } from 'librechat-data-provider';
 import {
   useCreateSubscriptionAdminPlan,
   useCreateSubscriptionOrder,
+  useCreateSubscriptionRedemptionBatch,
   useDeleteSubscriptionAdminPlan,
+  useDisableSubscriptionRedemptionCode,
+  useRedeemSubscriptionCode,
   useUpdateSubscriptionAdminPlan,
 } from './mutations';
 
@@ -18,12 +21,17 @@ jest.mock('librechat-data-provider', () => ({
     subscriptionStatus: 'subscriptionStatus',
     subscriptionOrder: 'subscriptionOrder',
     subscriptionAdminPlans: 'subscriptionAdminPlans',
+    subscriptionAdminRedemptionBatches: 'subscriptionAdminRedemptionBatches',
+    subscriptionAdminRedemptionCodes: 'subscriptionAdminRedemptionCodes',
   },
   dataService: {
     createSubscriptionOrder: jest.fn(),
     createSubscriptionAdminPlan: jest.fn(),
     updateSubscriptionAdminPlan: jest.fn(),
     deleteSubscriptionAdminPlan: jest.fn(),
+    redeemSubscriptionCode: jest.fn(),
+    createSubscriptionRedemptionBatch: jest.fn(),
+    disableSubscriptionRedemptionCode: jest.fn(),
   },
 }));
 
@@ -138,6 +146,69 @@ describe('subscription mutations', () => {
     });
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: [QueryKeys.subscriptionStatus],
+      refetchType: 'all',
+    });
+  });
+
+  it('redeems a subscription code and invalidates subscription status', () => {
+    useRedeemSubscriptionCode();
+
+    const mutationFn = mockUseMutation.mock.calls[0][0];
+    mutationFn({ code: 'LC-ABCD-EFGH-JKLM-NPQR' });
+    expect(dataService.redeemSubscriptionCode).toHaveBeenCalledWith({
+      code: 'LC-ABCD-EFGH-JKLM-NPQR',
+    });
+
+    const options = mockUseMutation.mock.calls[0][1];
+    options.onSuccess();
+    expect(invalidateQueries).toHaveBeenCalledWith([QueryKeys.subscriptionStatus]);
+    expect(invalidateQueries).toHaveBeenCalledWith([QueryKeys.subscriptionPlans]);
+    expect(invalidateQueries).toHaveBeenCalledWith([QueryKeys.balance]);
+  });
+
+  it('creates subscription redemption batches and invalidates redemption admin queries', () => {
+    useCreateSubscriptionRedemptionBatch();
+
+    const payload = {
+      name: 'Taobao',
+      quantity: 1,
+      durationDays: 30,
+      textDailyLimit: 1000,
+      imageDailyLimit: 20,
+    };
+    const mutationFn = mockUseMutation.mock.calls[0][0];
+    mutationFn(payload);
+    expect(dataService.createSubscriptionRedemptionBatch).toHaveBeenCalledWith(payload);
+
+    const options = mockUseMutation.mock.calls[0][1];
+    options.onSuccess();
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: [QueryKeys.subscriptionAdminRedemptionBatches],
+      refetchType: 'all',
+    });
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: [QueryKeys.subscriptionAdminRedemptionCodes],
+      refetchType: 'all',
+    });
+  });
+
+  it('disables subscription redemption codes and invalidates redemption admin queries', () => {
+    useDisableSubscriptionRedemptionCode();
+
+    const mutationFn = mockUseMutation.mock.calls[0][0];
+    mutationFn({ codeId: 'code-1', reason: 'refund' });
+    expect(dataService.disableSubscriptionRedemptionCode).toHaveBeenCalledWith('code-1', {
+      reason: 'refund',
+    });
+
+    const options = mockUseMutation.mock.calls[0][1];
+    options.onSuccess();
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: [QueryKeys.subscriptionAdminRedemptionBatches],
+      refetchType: 'all',
+    });
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: [QueryKeys.subscriptionAdminRedemptionCodes],
       refetchType: 'all',
     });
   });

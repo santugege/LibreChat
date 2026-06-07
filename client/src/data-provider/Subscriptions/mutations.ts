@@ -32,6 +32,17 @@ function invalidateSubscriptionPlanQueries(queryClient: ReturnType<typeof useQue
   });
 }
 
+function invalidateRedemptionAdminQueries(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({
+    queryKey: [QueryKeys.subscriptionAdminRedemptionBatches],
+    refetchType: 'all',
+  });
+  queryClient.invalidateQueries({
+    queryKey: [QueryKeys.subscriptionAdminRedemptionCodes],
+    refetchType: 'all',
+  });
+}
+
 export const useCreateSubscriptionOrder = (): UseMutationResult<
   t.TCreateSubscriptionOrderResponse,
   unknown,
@@ -47,6 +58,60 @@ export const useCreateSubscriptionOrder = (): UseMutationResult<
         queryClient.invalidateQueries([QueryKeys.subscriptionStatus]);
         queryClient.invalidateQueries([QueryKeys.subscriptionOrder, order.orderId]);
       },
+    },
+  );
+};
+
+export const useRedeemSubscriptionCode = (): UseMutationResult<
+  t.TRedeemSubscriptionCodeResponse,
+  unknown,
+  t.TRedeemSubscriptionCodeRequest,
+  unknown
+> => {
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    (payload: t.TRedeemSubscriptionCodeRequest) => dataService.redeemSubscriptionCode(payload),
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries([QueryKeys.subscriptionStatus]);
+        queryClient.invalidateQueries([QueryKeys.subscriptionPlans]);
+        queryClient.invalidateQueries([QueryKeys.balance]);
+      },
+    },
+  );
+};
+
+export const useCreateSubscriptionRedemptionBatch = (): UseMutationResult<
+  t.TCreateSubscriptionRedemptionBatchResponse,
+  unknown,
+  t.TCreateSubscriptionRedemptionBatchRequest,
+  unknown
+> => {
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    (payload: t.TCreateSubscriptionRedemptionBatchRequest) =>
+      dataService.createSubscriptionRedemptionBatch(payload),
+    {
+      onSuccess: () => invalidateRedemptionAdminQueries(queryClient),
+    },
+  );
+};
+
+export const useDisableSubscriptionRedemptionCode = (): UseMutationResult<
+  t.TSubscriptionRedemptionCode,
+  unknown,
+  { codeId: string; reason?: string },
+  unknown
+> => {
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    ({ codeId, reason }: { codeId: string; reason?: string }) =>
+      dataService.disableSubscriptionRedemptionCode(codeId, { reason }),
+    {
+      onSuccess: () => invalidateRedemptionAdminQueries(queryClient),
     },
   );
 };

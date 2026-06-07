@@ -48,6 +48,38 @@ export const useGetSubscriptionQuotaExemptions = (
   );
 };
 
+export const useGetSubscriptionAdminRedemptionBatches = (
+  params: t.TAdminPageParams = {},
+  config?: UseQueryOptions<t.TSubscriptionAdminRedemptionBatchesResponse>,
+): QueryObserverResult<t.TSubscriptionAdminRedemptionBatchesResponse> => {
+  return useQuery<t.TSubscriptionAdminRedemptionBatchesResponse>(
+    [QueryKeys.subscriptionAdminRedemptionBatches, params],
+    () => dataService.getSubscriptionAdminRedemptionBatches(params),
+    {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+      ...config,
+    },
+  );
+};
+
+export const useGetSubscriptionAdminRedemptionCodes = (
+  params: t.TSubscriptionAdminRedemptionCodesParams = {},
+  config?: UseQueryOptions<t.TSubscriptionAdminRedemptionCodesResponse>,
+): QueryObserverResult<t.TSubscriptionAdminRedemptionCodesResponse> => {
+  return useQuery<t.TSubscriptionAdminRedemptionCodesResponse>(
+    [QueryKeys.subscriptionAdminRedemptionCodes, params],
+    () => dataService.getSubscriptionAdminRedemptionCodes(params),
+    {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+      ...config,
+    },
+  );
+};
+
 export const useGetSubscriptionStatus = (
   config?: UseQueryOptions<t.TSubscriptionStatus>,
 ): QueryObserverResult<t.TSubscriptionStatus> => {
