@@ -179,6 +179,37 @@ export function getSubscriptionAdminOrders(
   return request.get(endpoints.subscriptionAdminOrders(params));
 }
 
+export function redeemSubscriptionCode(
+  payload: t.TRedeemSubscriptionCodeRequest,
+): Promise<t.TRedeemSubscriptionCodeResponse> {
+  return request.post(endpoints.subscriptionRedeem(), payload);
+}
+
+export function createSubscriptionRedemptionBatch(
+  payload: t.TCreateSubscriptionRedemptionBatchRequest,
+): Promise<t.TCreateSubscriptionRedemptionBatchResponse> {
+  return request.post(endpoints.subscriptionAdminRedemptionBatches(), payload);
+}
+
+export function getSubscriptionAdminRedemptionBatches(
+  params: t.TAdminPageParams = {},
+): Promise<t.TSubscriptionAdminRedemptionBatchesResponse> {
+  return request.get(endpoints.subscriptionAdminRedemptionBatches(params));
+}
+
+export function getSubscriptionAdminRedemptionCodes(
+  params: t.TSubscriptionAdminRedemptionCodesParams = {},
+): Promise<t.TSubscriptionAdminRedemptionCodesResponse> {
+  return request.get(endpoints.subscriptionAdminRedemptionCodes(params));
+}
+
+export function disableSubscriptionRedemptionCode(
+  codeId: string,
+  payload: { reason?: string } = {},
+): Promise<t.TSubscriptionRedemptionCode> {
+  return request.patch(endpoints.subscriptionAdminRedemptionCode(codeId), payload);
+}
+
 export function getSubscriptionAdminPlans(): Promise<t.TSubscriptionPlan[]> {
   return request.get(endpoints.subscriptionAdminPlans());
 }

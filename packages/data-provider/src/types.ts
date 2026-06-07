@@ -433,6 +433,8 @@ export type TSubscriptionOrderStatus =
   | 'cancelled'
   | 'failed';
 
+export type TSubscriptionRedemptionCodeStatus = 'active' | 'redeemed' | 'disabled' | 'expired';
+
 export type TSubscriptionPlan = {
   key: string;
   name: string;
@@ -476,6 +478,93 @@ export type TSubscriptionStatus = {
     expiresAt: string;
   } | null;
   usage: TSubscriptionUsage;
+};
+
+export type TRedeemSubscriptionCodeRequest = {
+  code: string;
+};
+
+export type TRedeemSubscriptionCodeResponse = {
+  subscription: NonNullable<TSubscriptionStatus['subscription']>;
+  plan: TSubscriptionPlan;
+};
+
+export type TCreateSubscriptionRedemptionBatchRequest = {
+  name: string;
+  quantity: number;
+  durationDays: number;
+  textDailyLimit: number;
+  imageDailyLimit: number;
+  planKey?: string;
+  planName?: string;
+  planDescription?: string;
+  planAmount?: number;
+  expiresAt?: string;
+  note?: string;
+  campaign?: string;
+};
+
+export type TSubscriptionRedemptionBatch = {
+  id: string;
+  name: string;
+  quantity: number;
+  durationDays: number;
+  textDailyLimit: number;
+  imageDailyLimit: number;
+  planKey: string;
+  planName: string;
+  expiresAt?: string;
+  campaign?: string;
+  note?: string;
+  createdAt?: string;
+};
+
+export type TGeneratedSubscriptionRedemptionCode = {
+  code: string;
+  prefix: string;
+  expiresAt?: string;
+};
+
+export type TCreateSubscriptionRedemptionBatchResponse = {
+  batch: TSubscriptionRedemptionBatch;
+  codes: TGeneratedSubscriptionRedemptionCode[];
+};
+
+export type TSubscriptionRedemptionCode = {
+  id: string;
+  batchId: string;
+  codePrefix: string;
+  status: TSubscriptionRedemptionCodeStatus;
+  durationDays: number;
+  textDailyLimit: number;
+  imageDailyLimit: number;
+  planKey: string;
+  planName: string;
+  expiresAt?: string;
+  redeemedBy?: string;
+  redeemedAt?: string;
+  disableReason?: string;
+  note?: string;
+  createdAt?: string;
+};
+
+export type TSubscriptionAdminRedemptionBatchesResponse = {
+  batches: TSubscriptionRedemptionBatch[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type TSubscriptionAdminRedemptionCodesParams = TAdminPageParams & {
+  batchId?: string;
+  status?: TSubscriptionRedemptionCodeStatus;
+};
+
+export type TSubscriptionAdminRedemptionCodesResponse = {
+  codes: TSubscriptionRedemptionCode[];
+  total: number;
+  limit: number;
+  offset: number;
 };
 
 export type TCreateSubscriptionOrderRequest = {

@@ -71,6 +71,11 @@ type SubscriptionAdminOrdersParams = AdminPageParams & {
   status?: string;
 };
 
+type SubscriptionAdminRedemptionCodesParams = AdminPageParams & {
+  batchId?: string;
+  status?: string;
+};
+
 export const adminUsers = (params: AdminPageParams = {}) =>
   `${BASE_URL}/api/admin/users${buildQuery(params)}`;
 
@@ -79,6 +84,14 @@ export const adminUserSearch = (params: AdminUserSearchParams) =>
 
 export const subscriptionAdminOrders = (params: SubscriptionAdminOrdersParams = {}) =>
   `${subscriptions()}/admin/orders${buildQuery(params)}`;
+export const subscriptionRedeem = () => `${subscriptions()}/redeem`;
+export const subscriptionAdminRedemptionBatches = (params: AdminPageParams = {}) =>
+  `${subscriptions()}/admin/redemption-batches${buildQuery(params)}`;
+export const subscriptionAdminRedemptionCodes = (
+  params: SubscriptionAdminRedemptionCodesParams = {},
+) => `${subscriptions()}/admin/redemption-codes${buildQuery(params)}`;
+export const subscriptionAdminRedemptionCode = (codeId: string) =>
+  `${subscriptionAdminRedemptionCodes()}/${encodeURIComponent(codeId)}`;
 
 export const userPlugins = () => `${BASE_URL}/api/user/plugins`;
 
