@@ -13,6 +13,7 @@ export type SubscriptionOrderStatus =
 
 export type SubscriptionUsageEventStatus = 'committed' | 'released';
 export type SubscriptionPaymentType = 'alipay' | 'wxpay';
+export type SubscriptionRedemptionCodeStatus = 'active' | 'redeemed' | 'disabled' | 'expired';
 export type SubscriptionUsageMetadata = Record<string, string | number | boolean>;
 
 export interface ISubscriptionPlan extends Document {
@@ -106,6 +107,48 @@ export interface ISubscriptionPaymentOrder extends Document {
 
 export interface ISubscriptionQuotaExemption extends Document {
   email: string;
+  tenantId?: string | null;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export interface ISubscriptionRedemptionBatch extends Document {
+  name: string;
+  quantity: number;
+  durationDays: number;
+  textDailyLimit: number;
+  imageDailyLimit: number;
+  planKey: string;
+  planName: string;
+  planDescription?: string;
+  planAmount?: number;
+  expiresAt?: Date;
+  note?: string;
+  campaign?: string;
+  createdBy: Types.ObjectId;
+  tenantId?: string | null;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export interface ISubscriptionRedemptionCode extends Document {
+  batch: Types.ObjectId;
+  codeHash: string;
+  codePrefix: string;
+  status: SubscriptionRedemptionCodeStatus;
+  durationDays: number;
+  textDailyLimit: number;
+  imageDailyLimit: number;
+  planKey: string;
+  planName: string;
+  planDescription?: string;
+  planAmount?: number;
+  expiresAt?: Date;
+  redeemedBy?: Types.ObjectId;
+  redeemedAt?: Date;
+  sourceSubscriptionId?: Types.ObjectId;
+  disableReason?: string;
+  note?: string;
   tenantId?: string | null;
   createdAt?: Date;
   updatedAt?: Date;

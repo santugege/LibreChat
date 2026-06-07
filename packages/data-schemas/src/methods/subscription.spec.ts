@@ -290,6 +290,8 @@ const subscriptionModelNames = [
   'SubscriptionUsageEvent',
   'SubscriptionPaymentOrder',
   'SubscriptionQuotaExemption',
+  'SubscriptionRedemptionBatch',
+  'SubscriptionRedemptionCode',
 ] as const;
 
 describe('subscription methods', () => {
@@ -320,6 +322,11 @@ describe('subscription methods', () => {
   afterAll(async () => {
     await mongoose.disconnect();
     await mongoServer.stop();
+  });
+
+  test('registers subscription redemption models', () => {
+    expect(mongoose.models.SubscriptionRedemptionBatch).toBeDefined();
+    expect(mongoose.models.SubscriptionRedemptionCode).toBeDefined();
   });
 
   test('upserts subscription plans and returns enabled plans sorted for display', async () => {
