@@ -57,6 +57,7 @@ export * from './subscriptions/reconciliation';
 export * from './subscriptions/idempotency';
 export * from './subscriptions/middleware';
 export * from './subscriptions/quota';
+export * from './subscriptions/redemption';
 export * from './subscriptions/routes';
 export * from './subscriptions/types';
 export * from './subscriptions/windows';

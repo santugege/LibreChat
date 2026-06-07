@@ -108,7 +108,6 @@ export type CountSubscriptionRedemptionCodesInput = Omit<
 export type RedeemSubscriptionRedemptionCodeInput = {
   codeHash: string;
   user: ObjectIdInput;
-  sourceSubscriptionId: ObjectIdInput;
   now?: Date;
   tenantId?: string;
 };
@@ -781,15 +780,17 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
           $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gt: now } }],
           ...getTenantFilter(input.tenantId),
         },
-        {
-          $set: {
-            status: 'redeemed',
-            redeemedBy: toObjectId(input.user),
-            redeemedAt: now,
-            sourceSubscriptionId: toObjectId(input.sourceSubscriptionId),
+        [
+          {
+            $set: {
+              sourceSubscriptionId: '$_id',
+              redeemedBy: toObjectId(input.user),
+              redeemedAt: now,
+              status: 'redeemed',
+            },
           },
-        },
-        { new: true, runValidators: true },
+        ],
+        { new: true },
       ).lean()) as ISubscriptionRedemptionCode | null;
     });
   }

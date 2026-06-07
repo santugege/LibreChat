@@ -370,7 +370,6 @@ type SubscriptionTestMethods = {
   redeemSubscriptionRedemptionCode: (input: {
     codeHash: string;
     user: mongoose.Types.ObjectId;
-    sourceSubscriptionId: mongoose.Types.ObjectId;
     now?: Date;
     tenantId?: string;
   }) => Promise<SubscriptionRedemptionCodeResult | null>;
@@ -430,8 +429,6 @@ describe('subscription methods', () => {
   test('creates, lists, counts, and atomically redeems subscription redemption codes', async () => {
     const adminId = new mongoose.Types.ObjectId();
     const userId = new mongoose.Types.ObjectId();
-    const sourceId = new mongoose.Types.ObjectId();
-    const tenantlessSourceId = new mongoose.Types.ObjectId();
     const expiresAt = new Date('2026-12-31T00:00:00.000Z');
 
     const batch = await methods.createSubscriptionRedemptionBatch!({
@@ -522,7 +519,6 @@ describe('subscription methods', () => {
     const redeemed = await methods.redeemSubscriptionRedemptionCode!({
       codeHash: 'hash-1',
       user: userId,
-      sourceSubscriptionId: sourceId,
       now: new Date('2026-06-07T00:00:00.000Z'),
       tenantId: 'tenant-a',
     });
@@ -530,36 +526,33 @@ describe('subscription methods', () => {
     const second = await methods.redeemSubscriptionRedemptionCode!({
       codeHash: 'hash-1',
       user: new mongoose.Types.ObjectId(),
-      sourceSubscriptionId: new mongoose.Types.ObjectId(),
       now: new Date('2026-06-07T00:01:00.000Z'),
       tenantId: 'tenant-a',
     });
     const wrongTenant = await methods.redeemSubscriptionRedemptionCode!({
       codeHash: 'hash-2',
       user: userId,
-      sourceSubscriptionId: new mongoose.Types.ObjectId(),
       now: new Date('2026-06-07T00:02:00.000Z'),
     });
     const tenantless = await methods.redeemSubscriptionRedemptionCode!({
       codeHash: 'hash-tenantless',
       user: userId,
-      sourceSubscriptionId: tenantlessSourceId,
       now: new Date('2026-06-07T00:03:00.000Z'),
     });
 
     expect(redeemed).toMatchObject({
       status: 'redeemed',
       redeemedBy: userId,
-      sourceSubscriptionId: sourceId,
       tenantId: 'tenant-a',
     });
+    expect(redeemed?.sourceSubscriptionId?.toString()).toBe(redeemed?._id.toString());
     expect(second).toBeNull();
     expect(wrongTenant).toBeNull();
     expect(tenantless).toMatchObject({
       status: 'redeemed',
-      sourceSubscriptionId: tenantlessSourceId,
       tenantId: null,
     });
+    expect(tenantless?.sourceSubscriptionId?.toString()).toBe(tenantless?._id.toString());
     await expect(
       methods.countSubscriptionRedemptionCodes!({ status: 'redeemed', tenantId: 'tenant-a' }),
     ).resolves.toBe(1);
@@ -607,7 +600,6 @@ describe('subscription methods', () => {
     const expiredRedeem = await methods.redeemSubscriptionRedemptionCode!({
       codeHash: 'expired-hash',
       user: new mongoose.Types.ObjectId(),
-      sourceSubscriptionId: new mongoose.Types.ObjectId(),
       now: new Date('2026-06-07T00:00:00.000Z'),
       tenantId: 'tenant-a',
     });
@@ -623,7 +615,6 @@ describe('subscription methods', () => {
     const disabledRedeem = await methods.redeemSubscriptionRedemptionCode!({
       codeHash: 'disable-hash',
       user: new mongoose.Types.ObjectId(),
-      sourceSubscriptionId: new mongoose.Types.ObjectId(),
       now: new Date('2026-06-07T00:01:00.000Z'),
       tenantId: 'tenant-a',
     });
