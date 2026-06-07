@@ -970,6 +970,215 @@ describe('createSubscriptionRouter', () => {
     );
   });
 
+  test('admin lists redemption batches with pagination and tenant scope', async () => {
+    const listSubscriptionRedemptionBatches = jest.fn().mockResolvedValue([
+      {
+        _id: 'batch-1',
+        name: 'Taobao',
+        quantity: 1,
+        durationDays: 30,
+        textDailyLimit: 1000,
+        imageDailyLimit: 20,
+        planKey: 'redeem-30d',
+        planName: 'Taobao',
+        createdBy: 'admin-1',
+        campaign: 'sku-30d',
+        createdAt: new Date('2026-06-07T00:00:00.000Z'),
+      },
+    ]);
+    const countSubscriptionRedemptionBatches = jest.fn().mockResolvedValue(1);
+    const app = createApp({
+      db: createDb({
+        listSubscriptionRedemptionBatches,
+        countSubscriptionRedemptionBatches,
+      } as Partial<AdminSubscriptionRouteDb>),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'admin-1', tenantId: 'tenant-a' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService,
+    });
+
+    const response = await requestApp(
+      app,
+      '/api/subscriptions/admin/redemption-batches?limit=20&offset=40',
+    );
+    const body = await readJson<{
+      batches: Array<{ id: string; campaign: string; createdAt: string }>;
+      total: number;
+      limit: number;
+      offset: number;
+    }>(response);
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({
+      batches: [
+        {
+          id: 'batch-1',
+          name: 'Taobao',
+          quantity: 1,
+          durationDays: 30,
+          textDailyLimit: 1000,
+          imageDailyLimit: 20,
+          planKey: 'redeem-30d',
+          planName: 'Taobao',
+          campaign: 'sku-30d',
+          createdAt: '2026-06-07T00:00:00.000Z',
+        },
+      ],
+      total: 1,
+      limit: 20,
+      offset: 40,
+    });
+    expect(listSubscriptionRedemptionBatches).toHaveBeenCalledWith({
+      limit: 20,
+      offset: 40,
+      tenantId: 'tenant-a',
+    });
+    expect(countSubscriptionRedemptionBatches).toHaveBeenCalledWith('tenant-a');
+  });
+
+  test('admin lists redemption codes and disables active codes with tenant scope', async () => {
+    const listSubscriptionRedemptionCodes = jest.fn().mockResolvedValue([
+      {
+        _id: 'code-1',
+        batch: 'batch-1',
+        codePrefix: 'LC-ABCD',
+        status: 'active',
+        durationDays: 30,
+        textDailyLimit: 1000,
+        imageDailyLimit: 20,
+        planKey: 'redeem-30d',
+        planName: 'Taobao',
+        createdAt: new Date('2026-06-07T00:00:00.000Z'),
+      },
+    ]);
+    const countSubscriptionRedemptionCodes = jest.fn().mockResolvedValue(1);
+    const disableSubscriptionRedemptionCode = jest.fn().mockResolvedValue({
+      _id: 'code-1',
+      batch: 'batch-1',
+      codePrefix: 'LC-ABCD',
+      status: 'disabled',
+      durationDays: 30,
+      textDailyLimit: 1000,
+      imageDailyLimit: 20,
+      planKey: 'redeem-30d',
+      planName: 'Taobao',
+      disableReason: 'refund',
+      createdAt: new Date('2026-06-07T00:00:00.000Z'),
+    });
+    const app = createApp({
+      db: createDb({
+        listSubscriptionRedemptionCodes,
+        countSubscriptionRedemptionCodes,
+        disableSubscriptionRedemptionCode,
+      } as Partial<AdminSubscriptionRouteDb>),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'admin-1', tenantId: 'tenant-a' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService,
+    });
+
+    const listResponse = await requestApp(
+      app,
+      '/api/subscriptions/admin/redemption-codes?batchId=batch-1&status=active&limit=10&offset=0',
+    );
+    const listBody = await readJson<{
+      codes: Array<{ id: string; batchId: string; codePrefix: string; status: string }>;
+      total: number;
+      limit: number;
+      offset: number;
+    }>(listResponse);
+    const disableResponse = await requestApp(
+      app,
+      '/api/subscriptions/admin/redemption-codes/code-1',
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'refund' }),
+      },
+    );
+    const disableBody = await readJson<{ id: string; status: string; disableReason: string }>(
+      disableResponse,
+    );
+
+    expect(listResponse.status).toBe(200);
+    expect(listBody).toEqual({
+      codes: [
+        {
+          id: 'code-1',
+          batchId: 'batch-1',
+          codePrefix: 'LC-ABCD',
+          status: 'active',
+          durationDays: 30,
+          textDailyLimit: 1000,
+          imageDailyLimit: 20,
+          planKey: 'redeem-30d',
+          planName: 'Taobao',
+          createdAt: '2026-06-07T00:00:00.000Z',
+        },
+      ],
+      total: 1,
+      limit: 10,
+      offset: 0,
+    });
+    expect(listSubscriptionRedemptionCodes).toHaveBeenCalledWith({
+      batch: 'batch-1',
+      status: 'active',
+      limit: 10,
+      offset: 0,
+      tenantId: 'tenant-a',
+    });
+    expect(countSubscriptionRedemptionCodes).toHaveBeenCalledWith({
+      batch: 'batch-1',
+      status: 'active',
+      tenantId: 'tenant-a',
+    });
+    expect(disableResponse.status).toBe(200);
+    expect(disableBody).toMatchObject({
+      id: 'code-1',
+      status: 'disabled',
+      disableReason: 'refund',
+    });
+    expect(disableSubscriptionRedemptionCode).toHaveBeenCalledWith({
+      codeId: 'code-1',
+      reason: 'refund',
+      tenantId: 'tenant-a',
+    });
+  });
+
+  test('admin disable redemption code returns 404 when code is not active', async () => {
+    const app = createApp({
+      db: createDb({
+        disableSubscriptionRedemptionCode: jest.fn().mockResolvedValue(null),
+      } as Partial<AdminSubscriptionRouteDb>),
+      requireJwtAuth: (req, _res, next) => {
+        (req as TestRequest).user = { id: 'admin-1', tenantId: 'tenant-a' };
+        next();
+      },
+      requireAdminAccess,
+      createPaymentService,
+    });
+
+    const response = await requestApp(
+      app,
+      '/api/subscriptions/admin/redemption-codes/code-1',
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'refund' }),
+      },
+    );
+
+    expect(response.status).toBe(404);
+    expect(await readJson<{ message: string }>(response)).toEqual({
+      message: 'Redemption code not found',
+    });
+  });
+
   test('admin reconcile endpoint reconciles a payment order and returns the latest status', async () => {
     const reconcileOrder = jest.fn().mockResolvedValue({ status: 'completed', changed: true });
     const app = createApp({

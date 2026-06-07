@@ -1,8 +1,11 @@
 import express from 'express';
 
 import type {
+  TSubscriptionAdminRedemptionBatchesResponse,
+  TSubscriptionAdminRedemptionCodesResponse,
   TSubscriptionAdminOrder,
   TSubscriptionAdminOrdersResponse,
+  TSubscriptionRedemptionCodeStatus,
   TSubscriptionOrderStatus,
 } from 'librechat-data-provider';
 import type { QuotaServiceDeps } from './quota';
@@ -99,6 +102,50 @@ type ListSubscriptionPaymentOrdersInput = CountSubscriptionPaymentOrdersInput & 
   offset: number;
 };
 
+type SubscriptionRedemptionBatchView = {
+  _id: SubscriptionPaymentObjectId;
+  name: string;
+  quantity: number;
+  durationDays: number;
+  textDailyLimit: number;
+  imageDailyLimit: number;
+  planKey: string;
+  planName: string;
+  expiresAt?: Date | string;
+  campaign?: string;
+  note?: string;
+  createdAt?: Date | string;
+};
+
+type SubscriptionRedemptionCodeView = {
+  _id: SubscriptionPaymentObjectId;
+  batch: SubscriptionPaymentObjectId;
+  codePrefix: string;
+  status: TSubscriptionRedemptionCodeStatus;
+  durationDays: number;
+  textDailyLimit: number;
+  imageDailyLimit: number;
+  planKey: string;
+  planName: string;
+  expiresAt?: Date | string;
+  redeemedBy?: SubscriptionPaymentObjectId;
+  redeemedAt?: Date | string;
+  disableReason?: string;
+  note?: string;
+  createdAt?: Date | string;
+};
+
+type CountSubscriptionRedemptionCodesInput = {
+  batch?: string;
+  status?: TSubscriptionRedemptionCodeStatus;
+  tenantId?: string;
+};
+
+type ListSubscriptionRedemptionCodesInput = CountSubscriptionRedemptionCodesInput & {
+  limit: number;
+  offset: number;
+};
+
 type SubscriptionQuotaExemptionView = {
   email: string;
   tenantId?: string | null;
@@ -157,6 +204,23 @@ type SubscriptionRouteDb = RedemptionServiceDb & {
     input: ListSubscriptionPaymentOrdersInput,
   ) => Promise<SubscriptionAdminPaymentOrderView[]>;
   countSubscriptionPaymentOrders: (input: CountSubscriptionPaymentOrdersInput) => Promise<number>;
+  listSubscriptionRedemptionBatches: (input: {
+    limit: number;
+    offset: number;
+    tenantId?: string;
+  }) => Promise<SubscriptionRedemptionBatchView[]>;
+  countSubscriptionRedemptionBatches: (tenantId?: string) => Promise<number>;
+  listSubscriptionRedemptionCodes: (
+    input: ListSubscriptionRedemptionCodesInput,
+  ) => Promise<SubscriptionRedemptionCodeView[]>;
+  countSubscriptionRedemptionCodes: (
+    input: CountSubscriptionRedemptionCodesInput,
+  ) => Promise<number>;
+  disableSubscriptionRedemptionCode: (input: {
+    codeId: string;
+    reason?: string;
+    tenantId?: string;
+  }) => Promise<SubscriptionRedemptionCodeView | null>;
 };
 
 type SubscriptionPaymentRouteService = {
@@ -209,6 +273,12 @@ const subscriptionOrderStatuses = new Set<TSubscriptionOrderStatus>([
   'expired',
   'cancelled',
   'failed',
+]);
+const redemptionCodeStatuses = new Set<TSubscriptionRedemptionCodeStatus>([
+  'active',
+  'redeemed',
+  'disabled',
+  'expired',
 ]);
 const subscriptionPlanCreateKeys = [
   'key',
@@ -560,6 +630,37 @@ function getRedemptionBatchBody(body: unknown): CreateRedemptionBatchBody {
   };
 }
 
+function getAdminRedemptionBatchesQuery(query: express.Request['query']): {
+  limit: number;
+  offset: number;
+} {
+  return parsePagination({
+    limit: getQueryString(query.limit),
+    offset: getQueryString(query.offset),
+  });
+}
+
+function getAdminRedemptionCodesQuery(
+  query: express.Request['query'],
+): ListSubscriptionRedemptionCodesInput {
+  const status = getQueryString(query.status);
+  const batch = getQueryString(query.batchId);
+  const pagination = parsePagination({
+    limit: getQueryString(query.limit),
+    offset: getQueryString(query.offset),
+  });
+
+  if (status && !redemptionCodeStatuses.has(status as TSubscriptionRedemptionCodeStatus)) {
+    throwInvalidRedemptionRequest();
+  }
+
+  return {
+    ...pagination,
+    ...(batch ? { batch } : {}),
+    ...(status ? { status: status as TSubscriptionRedemptionCodeStatus } : {}),
+  };
+}
+
 function isInvalidSubscriptionPlanRequest(error: unknown): boolean {
   return error instanceof Error && error.message === invalidSubscriptionPlanRequestMessage;
 }
@@ -770,6 +871,10 @@ function serializeDate(date: Date | undefined): string | undefined {
   return date ? date.toISOString() : undefined;
 }
 
+function serializeOptionalDate(date: Date | string | undefined): string | undefined {
+  return date ? new Date(date).toISOString() : undefined;
+}
+
 function serializeAdminOrder(order: SubscriptionAdminPaymentOrderView): TSubscriptionAdminOrder {
   const createdAt = serializeDate(order.createdAt);
   const updatedAt = serializeDate(order.updatedAt);
@@ -803,6 +908,50 @@ function serializeQuotaExemption(exemption: SubscriptionQuotaExemptionView) {
     ...(exemption.tenantId ? { tenantId: exemption.tenantId } : {}),
     ...(exemption.createdAt ? { createdAt: new Date(exemption.createdAt).toISOString() } : {}),
     ...(exemption.updatedAt ? { updatedAt: new Date(exemption.updatedAt).toISOString() } : {}),
+  };
+}
+
+function serializeRedemptionBatch(batch: SubscriptionRedemptionBatchView) {
+  const expiresAt = serializeOptionalDate(batch.expiresAt);
+  const createdAt = serializeOptionalDate(batch.createdAt);
+
+  return {
+    id: getObjectId(batch._id),
+    name: batch.name,
+    quantity: batch.quantity,
+    durationDays: batch.durationDays,
+    textDailyLimit: batch.textDailyLimit,
+    imageDailyLimit: batch.imageDailyLimit,
+    planKey: batch.planKey,
+    planName: batch.planName,
+    ...(expiresAt ? { expiresAt } : {}),
+    ...(batch.campaign ? { campaign: batch.campaign } : {}),
+    ...(batch.note ? { note: batch.note } : {}),
+    ...(createdAt ? { createdAt } : {}),
+  };
+}
+
+function serializeRedemptionCode(code: SubscriptionRedemptionCodeView) {
+  const expiresAt = serializeOptionalDate(code.expiresAt);
+  const redeemedAt = serializeOptionalDate(code.redeemedAt);
+  const createdAt = serializeOptionalDate(code.createdAt);
+
+  return {
+    id: getObjectId(code._id),
+    batchId: getObjectId(code.batch),
+    codePrefix: code.codePrefix,
+    status: code.status,
+    durationDays: code.durationDays,
+    textDailyLimit: code.textDailyLimit,
+    imageDailyLimit: code.imageDailyLimit,
+    planKey: code.planKey,
+    planName: code.planName,
+    ...(expiresAt ? { expiresAt } : {}),
+    ...(code.redeemedBy ? { redeemedBy: getObjectId(code.redeemedBy) } : {}),
+    ...(redeemedAt ? { redeemedAt } : {}),
+    ...(code.disableReason ? { disableReason: code.disableReason } : {}),
+    ...(code.note ? { note: code.note } : {}),
+    ...(createdAt ? { createdAt } : {}),
   };
 }
 
@@ -987,6 +1136,99 @@ export function createSubscriptionRouter(deps: CreateSubscriptionRouterDeps): ex
           body: getRedemptionBatchBody(req.body),
         });
         res.status(201).json(result);
+      } catch (error) {
+        handleRedemptionRouteError(error, res, next);
+      }
+    },
+  );
+
+  router.get(
+    '/admin/redemption-batches',
+    deps.requireJwtAuth,
+    deps.requireAdminAccess,
+    async (req, res, next) => {
+      try {
+        const user = getAuthenticatedUser(req);
+        const page = getAdminRedemptionBatchesQuery(req.query);
+        const tenantFilter = user.tenantId ? { tenantId: user.tenantId } : {};
+        const [batches, total] = await Promise.all([
+          deps.db.listSubscriptionRedemptionBatches({
+            ...page,
+            ...tenantFilter,
+          }),
+          deps.db.countSubscriptionRedemptionBatches(user.tenantId),
+        ]);
+        const response: TSubscriptionAdminRedemptionBatchesResponse = {
+          batches: batches.map(serializeRedemptionBatch),
+          total,
+          limit: page.limit,
+          offset: page.offset,
+        };
+
+        res.json(response);
+      } catch (error) {
+        handleRedemptionRouteError(error, res, next);
+      }
+    },
+  );
+
+  router.get(
+    '/admin/redemption-codes',
+    deps.requireJwtAuth,
+    deps.requireAdminAccess,
+    async (req, res, next) => {
+      try {
+        const user = getAuthenticatedUser(req);
+        const query = getAdminRedemptionCodesQuery(req.query);
+        const filter = {
+          ...(query.batch ? { batch: query.batch } : {}),
+          ...(query.status ? { status: query.status } : {}),
+          ...(user.tenantId ? { tenantId: user.tenantId } : {}),
+        };
+        const [codes, total] = await Promise.all([
+          deps.db.listSubscriptionRedemptionCodes({
+            ...filter,
+            limit: query.limit,
+            offset: query.offset,
+          }),
+          deps.db.countSubscriptionRedemptionCodes(filter),
+        ]);
+        const response: TSubscriptionAdminRedemptionCodesResponse = {
+          codes: codes.map(serializeRedemptionCode),
+          total,
+          limit: query.limit,
+          offset: query.offset,
+        };
+
+        res.json(response);
+      } catch (error) {
+        handleRedemptionRouteError(error, res, next);
+      }
+    },
+  );
+
+  router.patch(
+    '/admin/redemption-codes/:codeId',
+    deps.requireJwtAuth,
+    deps.requireAdminAccess,
+    async (req, res, next) => {
+      try {
+        const user = getAuthenticatedUser(req);
+        const reason = isObjectRecord(req.body) && typeof req.body.reason === 'string'
+          ? req.body.reason
+          : undefined;
+        const code = await deps.db.disableSubscriptionRedemptionCode({
+          codeId: req.params.codeId,
+          ...(reason ? { reason } : {}),
+          ...(user.tenantId ? { tenantId: user.tenantId } : {}),
+        });
+
+        if (!code) {
+          res.status(404).json({ message: 'Redemption code not found' });
+          return;
+        }
+
+        res.json(serializeRedemptionCode(code));
       } catch (error) {
         handleRedemptionRouteError(error, res, next);
       }
