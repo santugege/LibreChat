@@ -24,6 +24,16 @@ jest.mock('~/data-provider', () => ({
     isLoading: false,
     isError: false,
   }),
+  useGetSubscriptionAdminRedemptionBatches: () => ({
+    data: { batches: [], total: 0, limit: 20, offset: 0 },
+    isLoading: false,
+    isError: false,
+  }),
+  useCreateSubscriptionRedemptionBatch: () => ({
+    mutate: jest.fn(),
+    isLoading: false,
+    isError: false,
+  }),
 }));
 
 const { useAuthContext } = jest.requireMock('~/hooks') as {
@@ -66,5 +76,14 @@ describe('AdminShell', () => {
 
     expect(screen.getByText('com_admin_payments_title')).toBeInTheDocument();
     expect(screen.getByText('com_admin_payments_empty')).toBeInTheDocument();
+  });
+
+  it('renders redemption code management for admin users', () => {
+    useAuthContext.mockReturnValue({ user: { role: SystemRoles.ADMIN } });
+
+    renderAdminShell('/d/admin/redemptions');
+
+    expect(screen.getByText('com_admin_redemptions_title')).toBeInTheDocument();
+    expect(screen.getByText('com_admin_redemptions_empty')).toBeInTheDocument();
   });
 });

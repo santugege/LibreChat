@@ -1,11 +1,12 @@
 import React from 'react';
 import { Navigate, NavLink, useLocation } from 'react-router-dom';
-import { CreditCard, Users } from 'lucide-react';
+import { CreditCard, Ticket, Users } from 'lucide-react';
 import { SystemRoles } from 'librechat-data-provider';
 import { useAuthContext, useLocalize } from '~/hooks';
 import cn from '~/utils/cn';
 import AccountsPage from './AccountsPage';
 import PaymentsPage from './PaymentsPage';
+import RedemptionCodesPage from './RedemptionCodesPage';
 
 function AdminShell() {
   const localize = useLocalize();
@@ -33,7 +34,13 @@ function AdminShell() {
         : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
     );
   const path = location.pathname.replace(/\/+$/, '');
-  const page = path.endsWith('/payments') ? 'payments' : path.endsWith('/accounts') ? 'accounts' : '';
+  const page = path.endsWith('/payments')
+    ? 'payments'
+    : path.endsWith('/redemptions')
+      ? 'redemptions'
+      : path.endsWith('/accounts')
+        ? 'accounts'
+        : '';
 
   return (
     <main className="flex min-h-screen flex-col bg-background text-text-primary">
@@ -49,6 +56,10 @@ function AdminShell() {
               <CreditCard className="h-4 w-4" aria-hidden="true" />
               {localize('com_admin_payments_nav')}
             </NavLink>
+            <NavLink to="/d/admin/redemptions" className={linkClass}>
+              <Ticket className="h-4 w-4" aria-hidden="true" />
+              {localize('com_admin_redemptions_nav')}
+            </NavLink>
           </nav>
         </div>
       </header>
@@ -56,6 +67,7 @@ function AdminShell() {
         {page === '' && <Navigate to="/d/admin/accounts" replace />}
         {page === 'accounts' && <AccountsPage />}
         {page === 'payments' && <PaymentsPage />}
+        {page === 'redemptions' && <RedemptionCodesPage />}
       </div>
     </main>
   );
