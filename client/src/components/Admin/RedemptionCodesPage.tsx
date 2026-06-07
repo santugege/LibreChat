@@ -3,7 +3,9 @@ import { Download, TicketPlus } from 'lucide-react';
 import type t from 'librechat-data-provider';
 import {
   useCreateSubscriptionRedemptionBatch,
+  useDisableSubscriptionRedemptionCode,
   useGetSubscriptionAdminRedemptionBatches,
+  useGetSubscriptionAdminRedemptionCodes,
 } from '~/data-provider';
 import type { TranslationKeys } from '~/hooks';
 import { useLocalize } from '~/hooks';
@@ -95,14 +97,23 @@ function getDisplayDate(value: string | undefined): string {
 function RedemptionCodesPage() {
   const localize = useLocalize();
   const [offset, setOffset] = useState(0);
+  const [codeOffset, setCodeOffset] = useState(0);
+  const [selectedBatchId, setSelectedBatchId] = useState('');
   const [form, setForm] = useState<FormState>(emptyForm);
   const [created, setCreated] = useState<t.TCreateSubscriptionRedemptionBatchResponse | null>(
     null,
   );
   const batchesQuery = useGetSubscriptionAdminRedemptionBatches({ limit: pageSize, offset });
+  const codesQuery = useGetSubscriptionAdminRedemptionCodes(
+    { batchId: selectedBatchId, limit: pageSize, offset: codeOffset },
+    { enabled: selectedBatchId.length > 0 },
+  );
   const createBatch = useCreateSubscriptionRedemptionBatch();
+  const disableCode = useDisableSubscriptionRedemptionCode();
   const batches = batchesQuery.data?.batches ?? [];
   const total = batchesQuery.data?.total ?? 0;
+  const codes = codesQuery.data?.codes ?? [];
+  const codesTotal = codesQuery.data?.total ?? 0;
   const canSubmit = useMemo(() => {
     const payload = toPayload(form);
     return (
@@ -117,6 +128,11 @@ function RedemptionCodesPage() {
 
   const updateForm = (field: keyof FormState, value: string) => {
     setForm((current) => ({ ...current, [field]: value }));
+  };
+
+  const selectBatch = (batchId: string) => {
+    setSelectedBatchId(batchId);
+    setCodeOffset(0);
   };
 
   const submit = (event: React.FormEvent) => {
@@ -213,19 +229,20 @@ function RedemptionCodesPage() {
                 {localize('com_admin_redemptions_imageDailyLimit')}
               </th>
               <th className="px-3 py-2 font-medium">{localize('com_admin_redemptions_created')}</th>
+              <th className="px-3 py-2 font-medium">{localize('com_admin_redemptions_actions')}</th>
             </tr>
           </thead>
           <tbody>
             {batchesQuery.isLoading && (
               <tr>
-                <td className="px-3 py-6 text-center text-text-secondary" colSpan={7}>
+                <td className="px-3 py-6 text-center text-text-secondary" colSpan={8}>
                   {localize('com_admin_loading')}
                 </td>
               </tr>
             )}
             {!batchesQuery.isLoading && batches.length === 0 && (
               <tr>
-                <td className="px-3 py-6 text-center text-text-secondary" colSpan={7}>
+                <td className="px-3 py-6 text-center text-text-secondary" colSpan={8}>
                   {localize('com_admin_redemptions_empty')}
                 </td>
               </tr>
@@ -242,6 +259,15 @@ function RedemptionCodesPage() {
                   <td className="px-3 py-3 text-text-secondary">
                     {getDisplayDate(batch.createdAt)}
                   </td>
+                  <td className="px-3 py-3">
+                    <button
+                      type="button"
+                      className="rounded-md border border-border-light px-2 py-1 text-xs font-medium text-text-primary hover:bg-surface-hover"
+                      onClick={() => selectBatch(batch.id)}
+                    >
+                      {localize('com_admin_redemptions_view_codes')}
+                    </button>
+                  </td>
                 </tr>
               ))}
           </tbody>
@@ -254,6 +280,85 @@ function RedemptionCodesPage() {
         offset={offset}
         onOffsetChange={setOffset}
       />
+
+      {selectedBatchId && (
+        <section className="flex min-h-0 flex-col gap-3">
+          <h2 className="text-sm font-semibold text-text-primary">
+            {localize('com_admin_redemptions_codes_title')}
+          </h2>
+          {disableCode.isError && (
+            <div className="rounded-md border border-red-500/40 p-3 text-sm text-red-600" role="alert">
+              {localize('com_admin_redemptions_disable_error')}
+            </div>
+          )}
+          <div className="min-h-0 overflow-auto rounded-lg border border-border-light">
+            <table className="w-full min-w-[760px] border-separate border-spacing-0 text-left text-sm">
+              <thead className="bg-surface-secondary text-xs uppercase text-text-secondary">
+                <tr>
+                  <th className="px-3 py-2 font-medium">
+                    {localize('com_admin_redemptions_code_prefix')}
+                  </th>
+                  <th className="px-3 py-2 font-medium">
+                    {localize('com_admin_redemptions_code_status')}
+                  </th>
+                  <th className="px-3 py-2 font-medium">
+                    {localize('com_admin_redemptions_created')}
+                  </th>
+                  <th className="px-3 py-2 font-medium">
+                    {localize('com_admin_redemptions_actions')}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {codesQuery.isLoading && (
+                  <tr>
+                    <td className="px-3 py-6 text-center text-text-secondary" colSpan={4}>
+                      {localize('com_admin_loading')}
+                    </td>
+                  </tr>
+                )}
+                {!codesQuery.isLoading && codes.length === 0 && (
+                  <tr>
+                    <td className="px-3 py-6 text-center text-text-secondary" colSpan={4}>
+                      {localize('com_admin_redemptions_codes_empty')}
+                    </td>
+                  </tr>
+                )}
+                {!codesQuery.isLoading &&
+                  codes.map((code) => (
+                    <tr key={code.id} className="border-t border-border-light">
+                      <td className="px-3 py-3 font-medium text-text-primary">
+                        {code.codePrefix}
+                      </td>
+                      <td className="px-3 py-3 text-text-secondary">{code.status}</td>
+                      <td className="px-3 py-3 text-text-secondary">
+                        {getDisplayDate(code.createdAt)}
+                      </td>
+                      <td className="px-3 py-3">
+                        {code.status === 'active' && (
+                          <button
+                            type="button"
+                            disabled={disableCode.isLoading}
+                            className="rounded-md border border-border-light px-2 py-1 text-xs font-medium text-text-primary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
+                            onClick={() => disableCode.mutate({ codeId: code.id })}
+                          >
+                            {localize('com_admin_redemptions_disable_code')}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+          <PaginationControls
+            total={codesTotal}
+            limit={pageSize}
+            offset={codeOffset}
+            onOffsetChange={setCodeOffset}
+          />
+        </section>
+      )}
     </section>
   );
 }
