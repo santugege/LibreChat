@@ -171,6 +171,25 @@ describe('Subscription settings tab', () => {
     expect(screen.getByText('1 / 2')).toBeInTheDocument();
   });
 
+  it('shows the active subscription expiration time', () => {
+    mockUseGetSubscriptionStatus.mockReturnValue({
+      data: {
+        ...status,
+        subscription: {
+          planKey: 'pro_monthly',
+          status: 'active',
+          startsAt: '2026-05-04T00:00:00.000Z',
+          expiresAt: '2026-06-04T00:00:00.000Z',
+        },
+      },
+      isLoading: false,
+    });
+
+    render(<Subscription />);
+
+    expect(screen.getByText(/^com_nav_subscription_expires_at:/)).toBeInTheDocument();
+  });
+
   it('redeems a code from the subscription tab', async () => {
     const mutate = jest.fn();
     mockUseRedeemSubscriptionCode.mockReturnValue({

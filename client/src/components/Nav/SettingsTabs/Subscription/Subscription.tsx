@@ -54,6 +54,7 @@ function Subscription() {
 
   const plans = useMemo<TSubscriptionPlan[]>(() => plansQuery.data ?? [], [plansQuery.data]);
   const currentPlan = statusQuery.data?.plan;
+  const subscription = statusQuery.data?.subscription;
   const usage = statusQuery.data?.usage;
   const order = orderQuery.data;
   useRefreshSubscriptionStatusOnCompletedOrder(order);
@@ -146,6 +147,13 @@ function Subscription() {
                 resetAt: new Date(usage.resetAt).toLocaleString(),
               })}
             </p>
+            {subscription?.expiresAt && (
+              <p className="text-xs text-text-secondary">
+                {localize('com_nav_subscription_expires_at', {
+                  expiresAt: new Date(subscription.expiresAt).toLocaleString(),
+                })}
+              </p>
+            )}
           </div>
         )}
       </section>
