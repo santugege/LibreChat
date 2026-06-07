@@ -9,6 +9,9 @@ import type {
   ISubscriptionUsageEvent,
   ISubscriptionUsageBucket,
   ISubscriptionQuotaExemption,
+  ISubscriptionRedemptionBatch,
+  ISubscriptionRedemptionCode,
+  SubscriptionRedemptionCodeStatus,
 } from '~/types';
 import { runAsSystem } from '~/config/tenantContext';
 
@@ -47,6 +50,72 @@ export type UpdateSubscriptionPlanInput = Partial<
 
 export type CreateSubscriptionQuotaExemptionInput = {
   email: string;
+  tenantId?: string;
+};
+
+export type CreateSubscriptionRedemptionBatchInput = {
+  name: string;
+  quantity: number;
+  durationDays: number;
+  textDailyLimit: number;
+  imageDailyLimit: number;
+  planKey: string;
+  planName: string;
+  planDescription?: string;
+  planAmount?: number;
+  expiresAt?: Date;
+  note?: string;
+  campaign?: string;
+  createdBy: ObjectIdInput;
+  tenantId?: string;
+};
+
+export type InsertSubscriptionRedemptionCodeInput = {
+  batch: ObjectIdInput;
+  codeHash: string;
+  codePrefix: string;
+  durationDays: number;
+  textDailyLimit: number;
+  imageDailyLimit: number;
+  planKey: string;
+  planName: string;
+  planDescription?: string;
+  planAmount?: number;
+  expiresAt?: Date;
+  note?: string;
+  tenantId?: string;
+};
+
+export type ListSubscriptionRedemptionBatchesInput = {
+  limit: number;
+  offset: number;
+  tenantId?: string;
+};
+
+export type ListSubscriptionRedemptionCodesInput = {
+  batch?: ObjectIdInput;
+  status?: SubscriptionRedemptionCodeStatus;
+  limit: number;
+  offset: number;
+  tenantId?: string;
+};
+
+export type CountSubscriptionRedemptionCodesInput = Omit<
+  ListSubscriptionRedemptionCodesInput,
+  'limit' | 'offset'
+>;
+
+export type RedeemSubscriptionRedemptionCodeInput = {
+  codeHash: string;
+  user: ObjectIdInput;
+  sourceSubscriptionId: ObjectIdInput;
+  now?: Date;
+  tenantId?: string;
+};
+
+export type DisableSubscriptionRedemptionCodeInput = {
+  codeId: ObjectIdInput;
+  reason?: string;
   tenantId?: string;
 };
 
@@ -223,6 +292,34 @@ function validateCreateOrExtendUserSubscriptionInput(
 ): void {
   if (!Number.isInteger(input.durationDays) || input.durationDays < 1) {
     throw new Error('Invalid subscription duration: durationDays must be a positive integer');
+  }
+}
+
+function assertPositiveInteger(value: number, name: string): void {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`Invalid subscription redemption input: ${name} must be a positive integer`);
+  }
+}
+
+function assertNonnegativeInteger(value: number, name: string): void {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`Invalid subscription redemption input: ${name} must be a nonnegative integer`);
+  }
+}
+
+function validateRedemptionSnapshot(input: {
+  durationDays: number;
+  textDailyLimit: number;
+  imageDailyLimit: number;
+  planKey: string;
+  planName: string;
+}): void {
+  assertPositiveInteger(input.durationDays, 'durationDays');
+  assertNonnegativeInteger(input.textDailyLimit, 'textDailyLimit');
+  assertNonnegativeInteger(input.imageDailyLimit, 'imageDailyLimit');
+
+  if (input.planKey.trim().length === 0 || input.planName.trim().length === 0) {
+    throw new Error('Invalid subscription redemption input: planKey and planName are required');
   }
 }
 
@@ -573,6 +670,149 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
         ...getTenantFilter(tenantId),
       });
       return exemption !== null;
+    });
+  }
+
+  async function createSubscriptionRedemptionBatch(
+    input: CreateSubscriptionRedemptionBatchInput,
+  ): Promise<ISubscriptionRedemptionBatch | null> {
+    validateRedemptionSnapshot(input);
+    assertPositiveInteger(input.quantity, 'quantity');
+
+    return await runAsSystem(async () => {
+      const Batch = mongoose.models
+        .SubscriptionRedemptionBatch as Model<ISubscriptionRedemptionBatch>;
+      const batch = await Batch.create({
+        ...input,
+        createdBy: toObjectId(input.createdBy),
+        ...getTenantFilter(input.tenantId),
+      });
+      return batch.toObject() as ISubscriptionRedemptionBatch;
+    });
+  }
+
+  async function insertSubscriptionRedemptionCodes(
+    inputs: InsertSubscriptionRedemptionCodeInput[],
+  ): Promise<ISubscriptionRedemptionCode[]> {
+    if (inputs.length === 0) {
+      return [];
+    }
+
+    inputs.forEach(validateRedemptionSnapshot);
+
+    return await runAsSystem(async () => {
+      const Code = mongoose.models.SubscriptionRedemptionCode as Model<ISubscriptionRedemptionCode>;
+      const docs = await Code.insertMany(
+        inputs.map((input) => ({
+          ...input,
+          batch: toObjectId(input.batch),
+          ...getTenantFilter(input.tenantId),
+        })),
+        { ordered: true },
+      );
+      return docs.map((doc) => doc.toObject() as ISubscriptionRedemptionCode);
+    });
+  }
+
+  async function listSubscriptionRedemptionBatches(
+    input: ListSubscriptionRedemptionBatchesInput,
+  ): Promise<ISubscriptionRedemptionBatch[]> {
+    return await runAsSystem(async () => {
+      const Batch = mongoose.models
+        .SubscriptionRedemptionBatch as Model<ISubscriptionRedemptionBatch>;
+      return (await Batch.find(getTenantFilter(input.tenantId))
+        .sort({ createdAt: -1, _id: -1 })
+        .skip(input.offset)
+        .limit(input.limit)
+        .lean()) as ISubscriptionRedemptionBatch[];
+    });
+  }
+
+  async function countSubscriptionRedemptionBatches(tenantId?: string): Promise<number> {
+    return await runAsSystem(async () => {
+      const Batch = mongoose.models
+        .SubscriptionRedemptionBatch as Model<ISubscriptionRedemptionBatch>;
+      return await Batch.countDocuments(getTenantFilter(tenantId));
+    });
+  }
+
+  function getRedemptionCodeFilter(
+    input: CountSubscriptionRedemptionCodesInput,
+  ): FilterQuery<ISubscriptionRedemptionCode> {
+    return {
+      ...(input.batch ? { batch: toObjectId(input.batch) } : {}),
+      ...(input.status ? { status: input.status } : {}),
+      ...getTenantFilter(input.tenantId),
+    };
+  }
+
+  async function listSubscriptionRedemptionCodes(
+    input: ListSubscriptionRedemptionCodesInput,
+  ): Promise<ISubscriptionRedemptionCode[]> {
+    return await runAsSystem(async () => {
+      const Code = mongoose.models.SubscriptionRedemptionCode as Model<ISubscriptionRedemptionCode>;
+      return (await Code.find(getRedemptionCodeFilter(input))
+        .sort({ createdAt: -1, _id: -1 })
+        .skip(input.offset)
+        .limit(input.limit)
+        .lean()) as ISubscriptionRedemptionCode[];
+    });
+  }
+
+  async function countSubscriptionRedemptionCodes(
+    input: CountSubscriptionRedemptionCodesInput,
+  ): Promise<number> {
+    return await runAsSystem(async () => {
+      const Code = mongoose.models.SubscriptionRedemptionCode as Model<ISubscriptionRedemptionCode>;
+      return await Code.countDocuments(getRedemptionCodeFilter(input));
+    });
+  }
+
+  async function redeemSubscriptionRedemptionCode(
+    input: RedeemSubscriptionRedemptionCodeInput,
+  ): Promise<ISubscriptionRedemptionCode | null> {
+    return await runAsSystem(async () => {
+      const Code = mongoose.models.SubscriptionRedemptionCode as Model<ISubscriptionRedemptionCode>;
+      const now = input.now ?? new Date();
+      return (await Code.findOneAndUpdate(
+        {
+          codeHash: input.codeHash,
+          status: 'active',
+          $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gt: now } }],
+          ...getTenantFilter(input.tenantId),
+        },
+        {
+          $set: {
+            status: 'redeemed',
+            redeemedBy: toObjectId(input.user),
+            redeemedAt: now,
+            sourceSubscriptionId: toObjectId(input.sourceSubscriptionId),
+          },
+        },
+        { new: true, runValidators: true },
+      ).lean()) as ISubscriptionRedemptionCode | null;
+    });
+  }
+
+  async function disableSubscriptionRedemptionCode(
+    input: DisableSubscriptionRedemptionCodeInput,
+  ): Promise<ISubscriptionRedemptionCode | null> {
+    return await runAsSystem(async () => {
+      const Code = mongoose.models.SubscriptionRedemptionCode as Model<ISubscriptionRedemptionCode>;
+      return (await Code.findOneAndUpdate(
+        {
+          _id: toObjectId(input.codeId),
+          status: 'active',
+          ...getTenantFilter(input.tenantId),
+        },
+        {
+          $set: {
+            status: 'disabled',
+            ...(input.reason ? { disableReason: input.reason } : {}),
+          },
+        },
+        { new: true, runValidators: true },
+      ).lean()) as ISubscriptionRedemptionCode | null;
     });
   }
 
@@ -1225,6 +1465,14 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
     createSubscriptionQuotaExemption,
     deleteSubscriptionQuotaExemption,
     isSubscriptionQuotaExempt,
+    createSubscriptionRedemptionBatch,
+    insertSubscriptionRedemptionCodes,
+    listSubscriptionRedemptionBatches,
+    countSubscriptionRedemptionBatches,
+    listSubscriptionRedemptionCodes,
+    countSubscriptionRedemptionCodes,
+    redeemSubscriptionRedemptionCode,
+    disableSubscriptionRedemptionCode,
     getSubscriptionUsageBucket,
     getEnabledSubscriptionPlans,
     findActiveUserSubscription,

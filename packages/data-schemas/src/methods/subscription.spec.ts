@@ -146,6 +146,68 @@ type SubscriptionQuotaExemptionResult = {
   updatedAt?: Date;
 };
 
+type SubscriptionRedemptionCodeStatus = 'active' | 'redeemed' | 'disabled' | 'expired';
+
+type SubscriptionRedemptionBatchInput = {
+  name: string;
+  quantity: number;
+  durationDays: number;
+  textDailyLimit: number;
+  imageDailyLimit: number;
+  planKey: string;
+  planName: string;
+  planDescription?: string;
+  planAmount?: number;
+  expiresAt?: Date;
+  note?: string;
+  campaign?: string;
+  createdBy: mongoose.Types.ObjectId;
+  tenantId?: string;
+};
+
+type SubscriptionRedemptionBatchResult = Omit<
+  SubscriptionRedemptionBatchInput,
+  'createdBy' | 'tenantId'
+> & {
+  _id: mongoose.Types.ObjectId;
+  createdBy: mongoose.Types.ObjectId;
+  tenantId?: string | null;
+  createdAt?: Date;
+  updatedAt?: Date;
+};
+
+type SubscriptionRedemptionCodeInput = {
+  batch: mongoose.Types.ObjectId;
+  codeHash: string;
+  codePrefix: string;
+  durationDays: number;
+  textDailyLimit: number;
+  imageDailyLimit: number;
+  planKey: string;
+  planName: string;
+  planDescription?: string;
+  planAmount?: number;
+  expiresAt?: Date;
+  note?: string;
+  tenantId?: string;
+};
+
+type SubscriptionRedemptionCodeResult = Omit<
+  SubscriptionRedemptionCodeInput,
+  'batch' | 'tenantId'
+> & {
+  _id: mongoose.Types.ObjectId;
+  batch: mongoose.Types.ObjectId;
+  status: SubscriptionRedemptionCodeStatus;
+  redeemedBy?: mongoose.Types.ObjectId;
+  redeemedAt?: Date;
+  sourceSubscriptionId?: mongoose.Types.ObjectId;
+  disableReason?: string;
+  tenantId?: string | null;
+  createdAt?: Date;
+  updatedAt?: Date;
+};
+
 type CreateOrExtendUserSubscriptionInput = {
   user: string;
   planKey: string;
@@ -281,6 +343,42 @@ type SubscriptionTestMethods = {
     tenantId?: string,
   ) => Promise<SubscriptionQuotaExemptionResult | null>;
   isSubscriptionQuotaExempt: (email: string, tenantId?: string) => Promise<boolean>;
+  createSubscriptionRedemptionBatch: (
+    input: SubscriptionRedemptionBatchInput,
+  ) => Promise<SubscriptionRedemptionBatchResult | null>;
+  insertSubscriptionRedemptionCodes: (
+    inputs: SubscriptionRedemptionCodeInput[],
+  ) => Promise<SubscriptionRedemptionCodeResult[]>;
+  listSubscriptionRedemptionBatches: (input: {
+    limit: number;
+    offset: number;
+    tenantId?: string;
+  }) => Promise<SubscriptionRedemptionBatchResult[]>;
+  countSubscriptionRedemptionBatches: (tenantId?: string) => Promise<number>;
+  listSubscriptionRedemptionCodes: (input: {
+    batch?: mongoose.Types.ObjectId;
+    status?: SubscriptionRedemptionCodeStatus;
+    limit: number;
+    offset: number;
+    tenantId?: string;
+  }) => Promise<SubscriptionRedemptionCodeResult[]>;
+  countSubscriptionRedemptionCodes: (input: {
+    batch?: mongoose.Types.ObjectId;
+    status?: SubscriptionRedemptionCodeStatus;
+    tenantId?: string;
+  }) => Promise<number>;
+  redeemSubscriptionRedemptionCode: (input: {
+    codeHash: string;
+    user: mongoose.Types.ObjectId;
+    sourceSubscriptionId: mongoose.Types.ObjectId;
+    now?: Date;
+    tenantId?: string;
+  }) => Promise<SubscriptionRedemptionCodeResult | null>;
+  disableSubscriptionRedemptionCode: (input: {
+    codeId: mongoose.Types.ObjectId;
+    reason?: string;
+    tenantId?: string;
+  }) => Promise<SubscriptionRedemptionCodeResult | null>;
 };
 
 const subscriptionModelNames = [
@@ -327,6 +425,221 @@ describe('subscription methods', () => {
   test('registers subscription redemption models', () => {
     expect(mongoose.models.SubscriptionRedemptionBatch).toBeDefined();
     expect(mongoose.models.SubscriptionRedemptionCode).toBeDefined();
+  });
+
+  test('creates, lists, counts, and atomically redeems subscription redemption codes', async () => {
+    const adminId = new mongoose.Types.ObjectId();
+    const userId = new mongoose.Types.ObjectId();
+    const sourceId = new mongoose.Types.ObjectId();
+    const tenantlessSourceId = new mongoose.Types.ObjectId();
+    const expiresAt = new Date('2026-12-31T00:00:00.000Z');
+
+    const batch = await methods.createSubscriptionRedemptionBatch!({
+      name: 'Taobao 30 Day',
+      quantity: 2,
+      durationDays: 30,
+      textDailyLimit: 1000,
+      imageDailyLimit: 20,
+      planKey: 'redeem-30d',
+      planName: 'Taobao 30 Day',
+      planAmount: 0,
+      expiresAt,
+      campaign: 'taobao-sku-a',
+      createdBy: adminId,
+      tenantId: 'tenant-a',
+    });
+
+    await methods.insertSubscriptionRedemptionCodes!([
+      {
+        batch: batch!._id,
+        codeHash: 'hash-1',
+        codePrefix: 'LC-TEST',
+        durationDays: 30,
+        textDailyLimit: 1000,
+        imageDailyLimit: 20,
+        planKey: 'redeem-30d',
+        planName: 'Taobao 30 Day',
+        planAmount: 0,
+        expiresAt,
+        tenantId: 'tenant-a',
+      },
+      {
+        batch: batch!._id,
+        codeHash: 'hash-2',
+        codePrefix: 'LC-TEST',
+        durationDays: 30,
+        textDailyLimit: 1000,
+        imageDailyLimit: 20,
+        planKey: 'redeem-30d',
+        planName: 'Taobao 30 Day',
+        planAmount: 0,
+        expiresAt,
+        tenantId: 'tenant-a',
+      },
+      {
+        batch: batch!._id,
+        codeHash: 'hash-tenantless',
+        codePrefix: 'LC-OPEN',
+        durationDays: 7,
+        textDailyLimit: 100,
+        imageDailyLimit: 5,
+        planKey: 'redeem-7d',
+        planName: 'Tenantless Trial',
+      },
+    ]);
+
+    const batches = await methods.listSubscriptionRedemptionBatches!({
+      limit: 10,
+      offset: 0,
+      tenantId: 'tenant-a',
+    });
+    const tenantlessBatches = await methods.listSubscriptionRedemptionBatches!({
+      limit: 10,
+      offset: 0,
+    });
+    const activeTenantCodes = await methods.listSubscriptionRedemptionCodes!({
+      batch: batch!._id,
+      status: 'active',
+      limit: 10,
+      offset: 0,
+      tenantId: 'tenant-a',
+    });
+
+    expect(batch).toMatchObject({
+      name: 'Taobao 30 Day',
+      quantity: 2,
+      tenantId: 'tenant-a',
+      createdBy: adminId,
+    });
+    expect(batches.map((item) => item.name)).toEqual(['Taobao 30 Day']);
+    expect(tenantlessBatches).toHaveLength(0);
+    expect(activeTenantCodes.map((code) => code.codeHash).sort()).toEqual(['hash-1', 'hash-2']);
+    await expect(methods.countSubscriptionRedemptionBatches!('tenant-a')).resolves.toBe(1);
+    await expect(
+      methods.countSubscriptionRedemptionCodes!({ status: 'active', tenantId: 'tenant-a' }),
+    ).resolves.toBe(2);
+
+    const redeemed = await methods.redeemSubscriptionRedemptionCode!({
+      codeHash: 'hash-1',
+      user: userId,
+      sourceSubscriptionId: sourceId,
+      now: new Date('2026-06-07T00:00:00.000Z'),
+      tenantId: 'tenant-a',
+    });
+
+    const second = await methods.redeemSubscriptionRedemptionCode!({
+      codeHash: 'hash-1',
+      user: new mongoose.Types.ObjectId(),
+      sourceSubscriptionId: new mongoose.Types.ObjectId(),
+      now: new Date('2026-06-07T00:01:00.000Z'),
+      tenantId: 'tenant-a',
+    });
+    const wrongTenant = await methods.redeemSubscriptionRedemptionCode!({
+      codeHash: 'hash-2',
+      user: userId,
+      sourceSubscriptionId: new mongoose.Types.ObjectId(),
+      now: new Date('2026-06-07T00:02:00.000Z'),
+    });
+    const tenantless = await methods.redeemSubscriptionRedemptionCode!({
+      codeHash: 'hash-tenantless',
+      user: userId,
+      sourceSubscriptionId: tenantlessSourceId,
+      now: new Date('2026-06-07T00:03:00.000Z'),
+    });
+
+    expect(redeemed).toMatchObject({
+      status: 'redeemed',
+      redeemedBy: userId,
+      sourceSubscriptionId: sourceId,
+      tenantId: 'tenant-a',
+    });
+    expect(second).toBeNull();
+    expect(wrongTenant).toBeNull();
+    expect(tenantless).toMatchObject({
+      status: 'redeemed',
+      sourceSubscriptionId: tenantlessSourceId,
+      tenantId: null,
+    });
+    await expect(
+      methods.countSubscriptionRedemptionCodes!({ status: 'redeemed', tenantId: 'tenant-a' }),
+    ).resolves.toBe(1);
+  });
+
+  test('rejects expired codes and disables only active redemption codes in the matching tenant', async () => {
+    const adminId = new mongoose.Types.ObjectId();
+    const batch = await methods.createSubscriptionRedemptionBatch!({
+      name: 'Taobao Expiry',
+      quantity: 2,
+      durationDays: 7,
+      textDailyLimit: 100,
+      imageDailyLimit: 5,
+      planKey: 'redeem-7d',
+      planName: 'Taobao 7 Day',
+      createdBy: adminId,
+      tenantId: 'tenant-a',
+    });
+    const [expiredCode, activeCode] = await methods.insertSubscriptionRedemptionCodes!([
+      {
+        batch: batch!._id,
+        codeHash: 'expired-hash',
+        codePrefix: 'LC-OLD',
+        durationDays: 7,
+        textDailyLimit: 100,
+        imageDailyLimit: 5,
+        planKey: 'redeem-7d',
+        planName: 'Taobao 7 Day',
+        expiresAt: new Date('2026-06-01T00:00:00.000Z'),
+        tenantId: 'tenant-a',
+      },
+      {
+        batch: batch!._id,
+        codeHash: 'disable-hash',
+        codePrefix: 'LC-OFF',
+        durationDays: 7,
+        textDailyLimit: 100,
+        imageDailyLimit: 5,
+        planKey: 'redeem-7d',
+        planName: 'Taobao 7 Day',
+        tenantId: 'tenant-a',
+      },
+    ]);
+
+    const expiredRedeem = await methods.redeemSubscriptionRedemptionCode!({
+      codeHash: 'expired-hash',
+      user: new mongoose.Types.ObjectId(),
+      sourceSubscriptionId: new mongoose.Types.ObjectId(),
+      now: new Date('2026-06-07T00:00:00.000Z'),
+      tenantId: 'tenant-a',
+    });
+    const wrongTenantDisable = await methods.disableSubscriptionRedemptionCode!({
+      codeId: activeCode._id,
+      reason: 'wrong tenant',
+    });
+    const disabled = await methods.disableSubscriptionRedemptionCode!({
+      codeId: activeCode._id,
+      reason: 'taobao refund',
+      tenantId: 'tenant-a',
+    });
+    const disabledRedeem = await methods.redeemSubscriptionRedemptionCode!({
+      codeHash: 'disable-hash',
+      user: new mongoose.Types.ObjectId(),
+      sourceSubscriptionId: new mongoose.Types.ObjectId(),
+      now: new Date('2026-06-07T00:01:00.000Z'),
+      tenantId: 'tenant-a',
+    });
+
+    expect(expiredCode.status).toBe('active');
+    expect(expiredRedeem).toBeNull();
+    expect(wrongTenantDisable).toBeNull();
+    expect(disabled).toMatchObject({
+      status: 'disabled',
+      disableReason: 'taobao refund',
+      tenantId: 'tenant-a',
+    });
+    expect(disabledRedeem).toBeNull();
+    await expect(
+      methods.countSubscriptionRedemptionCodes!({ status: 'disabled', tenantId: 'tenant-a' }),
+    ).resolves.toBe(1);
   });
 
   test('upserts subscription plans and returns enabled plans sorted for display', async () => {
